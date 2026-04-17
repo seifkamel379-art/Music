@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import { PassThrough, type Readable } from "node:stream";
 import { Router, type IRouter } from "express";
 import { asc, desc, eq } from "drizzle-orm";
 import playdl from "play-dl";
@@ -98,7 +100,61 @@ async function searchMusic(q: string) {
   }
 }
 
-async function getAudioStream(videoId: string) {
+type AudioStream = {
+  stream: Readable;
+  type: string;
+};
+
+function getYtDlpStream(videoId: string): Promise<AudioStream> {
+  const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+  return new Promise((resolve, reject) => {
+    const child = spawn("yt-dlp", ["--no-playlist", "--no-warnings", "--quiet", "-f", "bestaudio/best", "-o", "-", watchUrl], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const output = new PassThrough();
+    let stderr = "";
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        child.kill("SIGTERM");
+        reject(new Error("Audio stream timed out before starting"));
+      }
+    }, 25000);
+
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr = `${stderr}${chunk.toString()}`.slice(-1200);
+    });
+
+    child.once("error", (error) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timeout);
+        reject(error);
+      }
+    });
+
+    child.stdout.once("data", (chunk: Buffer) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timeout);
+        output.write(chunk);
+        child.stdout.pipe(output);
+        resolve({ stream: output, type: "mp4" });
+      }
+    });
+
+    child.once("exit", (code) => {
+      clearTimeout(timeout);
+      if (!settled) {
+        settled = true;
+        reject(new Error(stderr.trim() || `Audio extractor exited with code ${code ?? "unknown"}`));
+      }
+    });
+  });
+}
+
+async function getAudioStream(videoId: string): Promise<AudioStream> {
   const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
   try {
     const info = await playdl.video_basic_info(watchUrl);
@@ -107,9 +163,13 @@ async function getAudioStream(videoId: string) {
     try {
       return await playdl.stream(watchUrl, { quality: 2 });
     } catch (secondError) {
-      throw new Error(
-        `Audio stream unavailable. Add YOUTUBE_COOKIES in Secrets if bot protection is blocking playback. First: ${firstError instanceof Error ? firstError.message : "unknown"}. Second: ${secondError instanceof Error ? secondError.message : "unknown"}`,
-      );
+      try {
+        return await getYtDlpStream(videoId);
+      } catch (thirdError) {
+        throw new Error(
+          `Audio stream unavailable. First: ${firstError instanceof Error ? firstError.message : "unknown"}. Second: ${secondError instanceof Error ? secondError.message : "unknown"}. Third: ${thirdError instanceof Error ? thirdError.message : "unknown"}`,
+        );
+      }
     }
   }
 }
