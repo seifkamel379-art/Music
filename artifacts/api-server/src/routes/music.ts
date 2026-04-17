@@ -1,39 +1,26 @@
-import { spawn } from "node:child_process";
-import { PassThrough, type Readable } from "node:stream";
+import { type Readable } from "node:stream";
 import { Router, type IRouter } from "express";
-import { asc, desc, eq } from "drizzle-orm";
-import playdl from "play-dl";
+import ytdl from "@distube/ytdl-core";
 import yts from "yt-search";
 import { z } from "zod/v4";
-import { db, musicFavoritesTable, musicPlayerStateTable, musicPlaylistTable } from "@workspace/db";
-import { YOUTUBE_COOKIE_STRING } from "../secrets.js";
+import { YOUTUBE_COOKIES, YOUTUBE_COOKIE_STRING } from "../secrets.js";
 
 const router: IRouter = Router();
 const PASSWORD = "80808016";
 
-const cookie = process.env.YOUTUBE_COOKIES || YOUTUBE_COOKIE_STRING;
-if (cookie) {
-  playdl.setToken({ youtube: { cookie } } as never);
-}
+const rawCookie = process.env.YOUTUBE_COOKIES || YOUTUBE_COOKIE_STRING;
+const rawCookieObjects = process.env.YOUTUBE_COOKIES
+  ? process.env.YOUTUBE_COOKIES.split(";").map((part) => {
+      const [name, ...rest] = part.trim().split("=");
+      return { name: name.trim(), value: rest.join("="), domain: ".youtube.com", path: "/", secure: true, expires: 9999999999 };
+    })
+  : YOUTUBE_COOKIES;
 
-const addTrackSchema = z.object({
-  videoId: z.string().min(1),
-  title: z.string().min(1),
-  artist: z.string().min(1),
-  duration: z.string().min(1),
-  thumbnail: z.string().nullable().optional(),
-  addedBy: z.string().min(1),
-});
+const agent = ytdl.createAgent(rawCookieObjects);
 
 const loginSchema = z.object({
   name: z.string().trim().min(1),
   password: z.string(),
-});
-
-const playerSchema = z.object({
-  currentVideoId: z.string().nullable().optional(),
-  isPlaying: z.boolean(),
-  updatedBy: z.string().optional(),
 });
 
 function streamUrl(videoId: string) {
@@ -45,50 +32,8 @@ function cleanText(value: string | undefined | null, fallback: string) {
   return text && text.length > 0 ? text : fallback;
 }
 
-function rowToTrack(row: typeof musicPlaylistTable.$inferSelect, favoriteIds: Set<string>) {
-  return {
-    videoId: row.videoId,
-    title: row.title,
-    artist: row.artist,
-    duration: row.duration,
-    thumbnail: row.thumbnail,
-    addedBy: row.addedBy,
-    addedAt: row.createdAt.toISOString(),
-    isFavorite: favoriteIds.has(row.videoId),
-    streamUrl: streamUrl(row.videoId),
-  };
-}
-
-function favoriteToTrack(row: typeof musicFavoritesTable.$inferSelect) {
-  return {
-    videoId: row.videoId,
-    title: row.title,
-    artist: row.artist,
-    duration: row.duration,
-    thumbnail: row.thumbnail,
-    createdAt: row.createdAt.toISOString(),
-    streamUrl: streamUrl(row.videoId),
-  };
-}
-
 async function searchMusic(q: string) {
   try {
-    const results = await playdl.search(q, {
-      limit: 18,
-      source: { youtube: "video" },
-    });
-
-    return results
-      .filter((item) => item.id)
-      .map((item) => ({
-        videoId: item.id ?? "",
-        title: cleanText(item.title, "Untitled track"),
-        artist: cleanText(item.channel?.name, "Unknown artist"),
-        duration: cleanText(item.durationRaw, "0:00"),
-        thumbnail: item.thumbnails?.[item.thumbnails.length - 1]?.url ?? null,
-        streamUrl: streamUrl(item.id ?? ""),
-      }));
-  } catch {
     const fallback = await yts(q);
     return fallback.videos.slice(0, 18).map((item) => ({
       videoId: item.videoId,
@@ -98,81 +43,21 @@ async function searchMusic(q: string) {
       thumbnail: item.thumbnail || null,
       streamUrl: streamUrl(item.videoId),
     }));
+  } catch (error) {
+    throw new Error(`Search failed: ${error instanceof Error ? error.message : "unknown"}`);
   }
 }
 
-type AudioStream = {
-  stream: Readable;
-  type: string;
-};
-
-function getYtDlpStream(videoId: string): Promise<AudioStream> {
+async function getAudioStream(videoId: string): Promise<{ stream: Readable; contentType: string }> {
   const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
-  return new Promise((resolve, reject) => {
-    const child = spawn("yt-dlp", ["--no-playlist", "--no-warnings", "--quiet", "-f", "bestaudio/best", "-o", "-", watchUrl], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const output = new PassThrough();
-    let stderr = "";
-    let settled = false;
-    const timeout = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        child.kill("SIGTERM");
-        reject(new Error("Audio stream timed out before starting"));
-      }
-    }, 25000);
-
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr = `${stderr}${chunk.toString()}`.slice(-1200);
-    });
-
-    child.once("error", (error) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timeout);
-        reject(error);
-      }
-    });
-
-    child.stdout.once("data", (chunk: Buffer) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timeout);
-        output.write(chunk);
-        child.stdout.pipe(output);
-        resolve({ stream: output, type: "mp4" });
-      }
-    });
-
-    child.once("exit", (code) => {
-      clearTimeout(timeout);
-      if (!settled) {
-        settled = true;
-        reject(new Error(stderr.trim() || `Audio extractor exited with code ${code ?? "unknown"}`));
-      }
-    });
-  });
-}
-
-async function getAudioStream(videoId: string): Promise<AudioStream> {
-  const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
-  try {
-    const info = await playdl.video_basic_info(watchUrl);
-    return await playdl.stream_from_info(info, { quality: 2 });
-  } catch (firstError) {
-    try {
-      return await playdl.stream(watchUrl, { quality: 2 });
-    } catch (secondError) {
-      try {
-        return await getYtDlpStream(videoId);
-      } catch (thirdError) {
-        throw new Error(
-          `Audio stream unavailable. First: ${firstError instanceof Error ? firstError.message : "unknown"}. Second: ${secondError instanceof Error ? secondError.message : "unknown"}. Third: ${thirdError instanceof Error ? thirdError.message : "unknown"}`,
-        );
-      }
-    }
-  }
+  const info = await ytdl.getInfo(watchUrl, { agent });
+  const formats = ytdl.filterFormats(info.formats, "audioonly");
+  const bestFormat = formats.sort((a, b) => (b.audioBitrate ?? 0) - (a.audioBitrate ?? 0))[0];
+  if (!bestFormat) throw new Error("No audio format available");
+  const stream = ytdl.downloadFromInfo(info, { format: bestFormat, agent });
+  const mime = bestFormat.mimeType ?? "audio/mp4";
+  const contentType = mime.split(";")[0];
+  return { stream, contentType };
 }
 
 router.post("/music/login", (req, res) => {
@@ -181,7 +66,6 @@ router.post("/music/login", (req, res) => {
     res.status(401).json({ message: "Wrong password" });
     return;
   }
-
   res.json({ ok: true, name: parsed.data.name });
 });
 
@@ -192,154 +76,7 @@ router.get("/music/search", async (req, res, next) => {
       res.json({ tracks: [] });
       return;
     }
-
     res.json({ tracks: await searchMusic(q) });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.get("/music/playlist", async (_req, res, next) => {
-  try {
-    const [playlist, favorites] = await Promise.all([
-      db.select().from(musicPlaylistTable).orderBy(asc(musicPlaylistTable.id)),
-      db.select({ videoId: musicFavoritesTable.videoId }).from(musicFavoritesTable),
-    ]);
-    const favoriteIds = new Set(favorites.map((item) => item.videoId));
-    res.json({ tracks: playlist.map((track) => rowToTrack(track, favoriteIds)) });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.post("/music/playlist", async (req, res, next) => {
-  try {
-    const parsed = addTrackSchema.parse(req.body);
-    const [track] = await db
-      .insert(musicPlaylistTable)
-      .values({
-        videoId: parsed.videoId,
-        title: parsed.title,
-        artist: parsed.artist,
-        duration: parsed.duration,
-        thumbnail: parsed.thumbnail ?? null,
-        addedBy: parsed.addedBy,
-      })
-      .onConflictDoUpdate({
-        target: musicPlaylistTable.videoId,
-        set: {
-          title: parsed.title,
-          artist: parsed.artist,
-          duration: parsed.duration,
-          thumbnail: parsed.thumbnail ?? null,
-          addedBy: parsed.addedBy,
-        },
-      })
-      .returning();
-
-    const favorites = await db
-      .select({ videoId: musicFavoritesTable.videoId })
-      .from(musicFavoritesTable)
-      .where(eq(musicFavoritesTable.videoId, parsed.videoId));
-
-    res.json(rowToTrack(track, new Set(favorites.map((item) => item.videoId))));
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.delete("/music/playlist/:videoId", async (req, res, next) => {
-  try {
-    await db.delete(musicPlaylistTable).where(eq(musicPlaylistTable.videoId, req.params.videoId));
-    res.json({ ok: true });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.get("/music/favorites", async (_req, res, next) => {
-  try {
-    const favorites = await db.select().from(musicFavoritesTable).orderBy(desc(musicFavoritesTable.createdAt));
-    res.json({ tracks: favorites.map(favoriteToTrack) });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.post("/music/favorites/:videoId", async (req, res, next) => {
-  try {
-    const parsed = addTrackSchema.parse({ ...req.body, videoId: req.params.videoId });
-    const existing = await db
-      .select({ videoId: musicFavoritesTable.videoId })
-      .from(musicFavoritesTable)
-      .where(eq(musicFavoritesTable.videoId, parsed.videoId));
-
-    if (existing.length > 0) {
-      await db.delete(musicFavoritesTable).where(eq(musicFavoritesTable.videoId, parsed.videoId));
-      res.json({ isFavorite: false });
-      return;
-    }
-
-    await db.insert(musicFavoritesTable).values({
-      videoId: parsed.videoId,
-      title: parsed.title,
-      artist: parsed.artist,
-      duration: parsed.duration,
-      thumbnail: parsed.thumbnail ?? null,
-    });
-
-    res.json({ isFavorite: true });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.get("/music/player", async (_req, res, next) => {
-  try {
-    const [state] = await db.select().from(musicPlayerStateTable).where(eq(musicPlayerStateTable.id, 1));
-    const currentVideoId = state?.currentVideoId ?? null;
-    res.json({
-      currentVideoId,
-      isPlaying: state?.isPlaying ?? false,
-      updatedBy: state?.updatedBy ?? null,
-      updatedAt: (state?.updatedAt ?? new Date()).toISOString(),
-      streamUrl: currentVideoId ? streamUrl(currentVideoId) : null,
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.put("/music/player", async (req, res, next) => {
-  try {
-    const parsed = playerSchema.parse(req.body);
-    const [state] = await db
-      .insert(musicPlayerStateTable)
-      .values({
-        id: 1,
-        currentVideoId: parsed.currentVideoId ?? null,
-        isPlaying: parsed.isPlaying,
-        updatedBy: parsed.updatedBy ?? null,
-        updatedAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: musicPlayerStateTable.id,
-        set: {
-          currentVideoId: parsed.currentVideoId ?? null,
-          isPlaying: parsed.isPlaying,
-          updatedBy: parsed.updatedBy ?? null,
-          updatedAt: new Date(),
-        },
-      })
-      .returning();
-
-    res.json({
-      currentVideoId: state.currentVideoId,
-      isPlaying: state.isPlaying,
-      updatedBy: state.updatedBy,
-      updatedAt: state.updatedAt.toISOString(),
-      streamUrl: state.currentVideoId ? streamUrl(state.currentVideoId) : null,
-    });
   } catch (error) {
     next(error);
   }
@@ -347,18 +84,26 @@ router.put("/music/player", async (req, res, next) => {
 
 router.get("/music/stream/:videoId", async (req, res, next) => {
   try {
-    const stream = await getAudioStream(req.params.videoId);
-    res.setHeader("Content-Type", stream.type.includes("webm") ? "audio/webm" : "audio/mp4");
+    const { stream, contentType } = await getAudioStream(req.params.videoId);
+    res.setHeader("Content-Type", contentType);
     res.setHeader("Cache-Control", "private, max-age=900");
+    res.setHeader("Access-Control-Allow-Origin", "*");
     if (req.query.download === "1") {
-      const rawTitle = typeof req.query.title === "string" ? req.query.title : `seif-music-${req.params.videoId}`;
-      const safeTitle = rawTitle.replace(/[^\w\u0600-\u06FF\s\-]/g, "").trim().replace(/\s+/g, "_") || `seif-music-${req.params.videoId}`;
+      const rawTitle = typeof req.query.title === "string" ? req.query.title : `track-${req.params.videoId}`;
+      const safeTitle = rawTitle.replace(/[^\w\u0600-\u06FF\s\-]/g, "").trim().replace(/\s+/g, "_") || `track-${req.params.videoId}`;
       res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.mp3"`);
     }
-    stream.stream.pipe(res);
+    stream.pipe(res);
+    stream.on("error", (err) => {
+      req.log.error({ err }, "Stream pipe error");
+      if (!res.headersSent) res.status(503).json({ message: "Stream interrupted" });
+    });
   } catch (error) {
     req.log.error({ err: error, videoId: req.params.videoId }, "Music stream failed");
-    res.status(503).json({ message: error instanceof Error ? error.message : "Audio stream unavailable" });
+    if (!res.headersSent) {
+      res.status(503).json({ message: error instanceof Error ? error.message : "Audio stream unavailable" });
+    }
+    next(error);
   }
 });
 

@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@distube/ytdl-core": "^4.16.12",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
     "cheerio": "^1.2.0",

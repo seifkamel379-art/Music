@@ -2,7 +2,7 @@
 
 ## Overview
 
-This is a pnpm workspace monorepo. The active product is **Seif music**, a private Expo mobile music streaming app backed by an Express API and PostgreSQL.
+This is a pnpm workspace monorepo. The active product is **Seif music**, a private Expo mobile music streaming app backed by an Express API.
 
 ## Stack
 
@@ -12,8 +12,7 @@ This is a pnpm workspace monorepo. The active product is **Seif music**, a priva
 - **TypeScript version**: 5.9
 - **Mobile app**: Expo / React Native
 - **API framework**: Express 5
-- **Database**: PostgreSQL + Drizzle ORM
-- **Validation**: Zod (`zod/v4`), `drizzle-zod`
+- **Validation**: Zod (`zod/v4`)
 - **API codegen**: Orval from `lib/api-spec/openapi.yaml`
 - **Build**: esbuild for API bundling
 
@@ -22,20 +21,23 @@ This is a pnpm workspace monorepo. The active product is **Seif music**, a priva
 - App name: Seif music
 - Private login uses a shared password: `80808016`
 - UI must not mention YouTube; music source details stay hidden from users.
-- Palette lives in `artifacts/mobile/constants/colors.ts` and uses beige/brown luxury tones.
-- Music search uses `play-dl` first with `yt-search` fallback.
-- Audio streaming tries `play-dl` first and falls back to the system `yt-dlp` extractor, which is installed as a system dependency.
-- `YOUTUBE_COOKIES` env var is used if present; hardcoded fallback cookies live in `artifacts/api-server/src/secrets.ts`.
-- Shared data tables are in `lib/db/src/schema/music.ts` for playlist, favorites, and synchronized player state.
-- Tab bar is intentionally hidden (`display: none`) — navigation handled via in-screen NavPill buttons.
-- Search history is persisted to AsyncStorage under key `seif-search-history` (up to 10 entries).
+- Palette lives in `artifacts/mobile/constants/colors.ts` — beige/brown luxury tones (`espresso`, `gold`, `sand`).
+- Music search uses `yt-search`. Audio streaming uses `@distube/ytdl-core` with cookie agent.
+- YouTube cookies stored as object array in `artifacts/api-server/src/secrets.ts` (compatible with `ytdl.createAgent`).
+- **All user data (playlist, favorites) stored client-side in AsyncStorage** — no DB dependency for user data.
+- `LocalMusicContext` in `artifacts/mobile/contexts/LocalMusicContext.tsx` manages all local state.
+- `AudioPlayerContext` in `artifacts/mobile/contexts/AudioPlayerContext.tsx` manages shared audio player instance with queue/next/prev.
+- Tab bar is hidden (`display: none`) — navigation handled via in-screen NavPill buttons.
+- Search history stored in AsyncStorage key `seif-search-history` (up to 10 entries).
 - Device music tab uses `expo-media-library` to list phone audio files and play them locally.
-- Download uses `expo-file-system` + `expo-media-library` to save with the track title as the filename.
-- Main scroll uses a single `FlatList` with `ListHeaderComponent` for smooth, lag-free scrolling (no nested ScrollView+FlatList).
+- Download uses `Linking.openURL()` — Chrome intent on Android, system browser fallback.
+- Player modal at `/player-modal` — full-screen Spotify-style, opened by tapping the mini player bar.
+- Main scroll uses a single `FlatList` with `ListHeaderComponent` — lag-free scrolling.
+- `vercel.json` in root for PWA/web deployment of the Expo web export. Run `pnpm --filter @workspace/mobile run build:web` to generate `dist/`.
 
 ## Key Commands
 
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API client and Zod schemas from OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes in development
 - `pnpm --filter @workspace/api-server run dev` — run API server locally
 - `pnpm --filter @workspace/mobile run dev` — run Expo mobile app
+- `pnpm --filter @workspace/mobile run build:web` — build web/PWA export to `artifacts/mobile/dist/`

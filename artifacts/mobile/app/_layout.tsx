@@ -15,17 +15,36 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { AudioPlayerProvider } from "@/contexts/AudioPlayerContext";
+import { LocalMusicProvider } from "@/contexts/LocalMusicContext";
 import { SessionProvider } from "@/contexts/SessionContext";
 
 setBaseUrl(process.env.EXPO_PUBLIC_DOMAIN ? `https://${process.env.EXPO_PUBLIC_DOMAIN}` : null);
 SplashScreen.preventAutoHideAsync();
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      staleTime: 30000,
+    },
+  },
+});
 
 function RootLayoutNav() {
   return (
-    <Stack screenOptions={{ headerBackTitle: "Back" }}>
+    <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="player-modal"
+        options={{
+          presentation: "modal",
+          animation: "slide_from_bottom",
+          headerShown: false,
+          gestureEnabled: true,
+          gestureDirection: "vertical",
+        }}
+      />
     </Stack>
   );
 }
@@ -50,10 +69,14 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
-          <GestureHandlerRootView>
+          <GestureHandlerRootView style={{ flex: 1 }}>
             <KeyboardProvider>
               <SessionProvider>
-                <RootLayoutNav />
+                <LocalMusicProvider>
+                  <AudioPlayerProvider>
+                    <RootLayoutNav />
+                  </AudioPlayerProvider>
+                </LocalMusicProvider>
               </SessionProvider>
             </KeyboardProvider>
           </GestureHandlerRootView>
