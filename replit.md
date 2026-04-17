@@ -25,8 +25,13 @@ This is a pnpm workspace monorepo. The active product is **Seif music**, a priva
 - Palette lives in `artifacts/mobile/constants/colors.ts` and uses beige/brown luxury tones.
 - Music search uses `play-dl` first with `yt-search` fallback.
 - Audio streaming tries `play-dl` first and falls back to the system `yt-dlp` extractor, which is installed as a system dependency.
-- `YOUTUBE_COOKIES` is available as a secret for providers that need authenticated extraction.
+- `YOUTUBE_COOKIES` env var is used if present; hardcoded fallback cookies live in `artifacts/api-server/src/secrets.ts`.
 - Shared data tables are in `lib/db/src/schema/music.ts` for playlist, favorites, and synchronized player state.
+- Tab bar is intentionally hidden (`display: none`) — navigation handled via in-screen NavPill buttons.
+- Search history is persisted to AsyncStorage under key `seif-search-history` (up to 10 entries).
+- Device music tab uses `expo-media-library` to list phone audio files and play them locally.
+- Download uses `expo-file-system` + `expo-media-library` to save with the track title as the filename.
+- Main scroll uses a single `FlatList` with `ListHeaderComponent` for smooth, lag-free scrolling (no nested ScrollView+FlatList).
 
 ## Key Commands
 

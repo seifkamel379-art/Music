@@ -16,11 +16,13 @@
     "ios": {
       "supportsTablet": false,
       "infoPlist": {
-        "UIBackgroundModes": ["audio"]
+        "UIBackgroundModes": ["audio"],
+        "NSMicrophoneUsageDescription": "للتشغيل الصوتي",
+        "NSAppleMusicUsageDescription": "للوصول لمكتبة الموسيقى"
       }
     },
     "android": {
-      "permissions": ["WAKE_LOCK", "FOREGROUND_SERVICE"]
+      "permissions": ["WAKE_LOCK", "FOREGROUND_SERVICE", "READ_EXTERNAL_STORAGE", "READ_MEDIA_AUDIO"]
     },
     "web": {
       "favicon": "./assets/images/icon.png"
@@ -33,7 +35,8 @@
         }
       ],
       "expo-font",
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-media-library"
     ],
     "experiments": {
       "typedRoutes": true,

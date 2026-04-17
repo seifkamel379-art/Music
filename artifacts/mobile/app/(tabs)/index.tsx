@@ -16,19 +16,21 @@ import {
   type PlaylistTrack,
   type Track,
 } from "@workspace/api-client-react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createAudioPlayer, setAudioModeAsync, useAudioPlayerStatus } from "expo-audio";
+import * as FileSystem from "expo-file-system";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
-import * as Linking from "expo-linking";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import * as MediaLibrary from "expo-media-library";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Keyboard,
   Platform,
   Pressable,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -40,11 +42,22 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useSession } from "@/contexts/SessionContext";
 import { useColors } from "@/hooks/useColors";
 
-type Section = "home" | "search" | "playlist" | "favorites";
+type Section = "home" | "search" | "playlist" | "favorites" | "device";
 type AnyTrack = Track | PlaylistTrack;
+
+type DeviceTrack = {
+  id: string;
+  filename: string;
+  title: string;
+  artist: string;
+  duration: string;
+  uri: string;
+};
 
 const domain = process.env.EXPO_PUBLIC_DOMAIN ? `https://${process.env.EXPO_PUBLIC_DOMAIN}` : "";
 const quickSearches = ["اغاني مصرية", "عمرو دياب", "ويجز", "تامر حسني", "أم كلثوم", "راب مصري"];
+const SEARCH_HISTORY_KEY = "seif-search-history";
+const MAX_HISTORY = 10;
 
 function getAbsoluteUrl(url?: string | null) {
   if (!url) return null;
@@ -60,6 +73,13 @@ function getCover(index: number) {
   return covers[index % covers.length];
 }
 
+function formatDurationMs(ms: number) {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
 export default function MusicScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -71,9 +91,65 @@ export default function MusicScreen() {
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
   const [currentTrack, setCurrentTrack] = useState<AnyTrack | null>(null);
+  const [currentDeviceTrack, setCurrentDeviceTrack] = useState<DeviceTrack | null>(null);
   const [lastSyncedVideoId, setLastSyncedVideoId] = useState<string | null>(null);
-  const playerRef = useRef(createAudioPlayer(null, { updateInterval: 700, keepAudioSessionActive: true }));
+  const [searchHistory, setSearchHistory] = useState<string[]>([]);
+  const [deviceTracks, setDeviceTracks] = useState<DeviceTrack[]>([]);
+  const [mediaPermission, requestMediaPermission] = MediaLibrary.usePermissions();
+  const playerRef = useRef(createAudioPlayer(null, { updateInterval: 500, keepAudioSessionActive: true }));
   const status = useAudioPlayerStatus(playerRef.current);
+
+  useEffect(() => {
+    AsyncStorage.getItem(SEARCH_HISTORY_KEY)
+      .then((raw) => { if (raw) setSearchHistory(JSON.parse(raw)); })
+      .catch(() => undefined);
+  }, []);
+
+  async function saveSearchHistory(term: string) {
+    if (!term.trim() || term.trim().length < 2) return;
+    const updated = [term, ...searchHistory.filter((h) => h !== term)].slice(0, MAX_HISTORY);
+    setSearchHistory(updated);
+    await AsyncStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(updated)).catch(() => undefined);
+  }
+
+  async function clearSearchHistory() {
+    setSearchHistory([]);
+    await AsyncStorage.removeItem(SEARCH_HISTORY_KEY).catch(() => undefined);
+  }
+
+  useEffect(() => {
+    if (section !== "device") return;
+    if (mediaPermission?.granted) {
+      loadDeviceTracks();
+    } else if (mediaPermission && !mediaPermission.granted && !mediaPermission.canAskAgain) {
+      Alert.alert("تحتاج إذن", "افتح الإعدادات وأذن للتطبيق بالوصول للملفات الصوتية");
+    } else {
+      requestMediaPermission().then((res) => {
+        if (res.granted) loadDeviceTracks();
+      });
+    }
+  }, [section, mediaPermission?.granted]);
+
+  async function loadDeviceTracks() {
+    try {
+      const { assets } = await MediaLibrary.getAssetsAsync({
+        mediaType: MediaLibrary.MediaType.audio,
+        first: 200,
+        sortBy: MediaLibrary.SortBy.default,
+      });
+      const tracks: DeviceTrack[] = assets.map((asset) => ({
+        id: asset.id,
+        filename: asset.filename,
+        title: asset.filename.replace(/\.[^/.]+$/, ""),
+        artist: "جهازك",
+        duration: formatDurationMs(asset.duration * 1000),
+        uri: asset.uri,
+      }));
+      setDeviceTracks(tracks);
+    } catch {
+      Alert.alert("خطأ", "تعذّر تحميل الملفات الصوتية");
+    }
+  }
 
   const login = useMusicLogin({
     mutation: {
@@ -128,7 +204,10 @@ export default function MusicScreen() {
   const playlistTracks = playlist.data?.tracks ?? [];
   const favoriteTracks = favorites.data?.tracks ?? [];
   const searchTracks = search.data?.tracks ?? [];
-  const allKnownTracks = useMemo(() => [...playlistTracks, ...favoriteTracks, ...searchTracks], [playlistTracks, favoriteTracks, searchTracks]);
+  const allKnownTracks = useMemo(
+    () => [...playlistTracks, ...favoriteTracks, ...searchTracks],
+    [playlistTracks, favoriteTracks, searchTracks],
+  );
   const featured = playlistTracks.length > 0 ? playlistTracks.slice(0, 6) : searchTracks.slice(0, 6);
 
   useEffect(() => {
@@ -161,6 +240,7 @@ export default function MusicScreen() {
   async function playTrack(track: AnyTrack, sync = true) {
     const url = getAbsoluteUrl(track.streamUrl);
     if (!url) return;
+    setCurrentDeviceTrack(null);
     setCurrentTrack(track);
     try {
       playerRef.current.replace({ uri: url });
@@ -180,15 +260,35 @@ export default function MusicScreen() {
     }
   }
 
+  async function playDeviceTrack(track: DeviceTrack) {
+    setCurrentTrack(null);
+    setCurrentDeviceTrack(track);
+    try {
+      playerRef.current.replace({ uri: track.uri });
+      playerRef.current.play();
+      playerRef.current.setActiveForLockScreen(true, {
+        title: track.title,
+        artist: track.artist,
+        album: "Seif music",
+      });
+    } catch {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
+  }
+
   function pauseOrResume() {
-    if (!currentTrack) return;
+    if (!currentTrack && !currentDeviceTrack) return;
     if (status.playing) {
       playerRef.current.pause();
-      updatePlayer.mutate({ data: { currentVideoId: currentTrack.videoId, isPlaying: false, updatedBy: session.name ?? "Seif" } });
+      if (currentTrack) {
+        updatePlayer.mutate({ data: { currentVideoId: currentTrack.videoId, isPlaying: false, updatedBy: session.name ?? "Seif" } });
+      }
       return;
     }
     playerRef.current.play();
-    updatePlayer.mutate({ data: { currentVideoId: currentTrack.videoId, isPlaying: true, updatedBy: session.name ?? "Seif" } });
+    if (currentTrack) {
+      updatePlayer.mutate({ data: { currentVideoId: currentTrack.videoId, isPlaying: true, updatedBy: session.name ?? "Seif" } });
+    }
   }
 
   function add(track: AnyTrack) {
@@ -219,9 +319,67 @@ export default function MusicScreen() {
   }
 
   async function downloadTrack(track: AnyTrack) {
-    const url = getAbsoluteUrl(`${track.streamUrl}?download=1`);
-    if (url) await Linking.openURL(url);
+    const safeTitle = track.title.replace(/[^\w\u0600-\u06FF\s\-]/g, "").trim().replace(/\s+/g, "_");
+    const url = getAbsoluteUrl(`${track.streamUrl}?download=1&title=${encodeURIComponent(track.title)}`);
+    if (!url) return;
+    try {
+      const dest = `${FileSystem.documentDirectory}${safeTitle || track.videoId}.mp3`;
+      const res = await FileSystem.downloadAsync(url, dest);
+      if (res.status === 200) {
+        const { status: libStatus } = await MediaLibrary.requestPermissionsAsync();
+        if (libStatus === "granted") {
+          await MediaLibrary.createAssetAsync(res.uri);
+          Alert.alert("تم التحميل", `تم حفظ "${track.title}" في مكتبتك`);
+        } else {
+          Alert.alert("تم التحميل", `الملف محفوظ: ${safeTitle}.mp3`);
+        }
+      }
+    } catch {
+      Alert.alert("خطأ في التحميل", "حاول مرة تانية");
+    }
   }
+
+  const activePlayerTrack = currentTrack
+    ? { title: currentTrack.title, artist: currentTrack.artist, thumbnail: currentTrack.thumbnail ?? null }
+    : currentDeviceTrack
+    ? { title: currentDeviceTrack.title, artist: currentDeviceTrack.artist, thumbnail: null }
+    : null;
+
+  const listData: AnyTrack[] = useMemo(() => {
+    if (section === "favorites") return favoriteTracks;
+    if (section === "playlist") return playlistTracks;
+    if (section === "home" || section === "search") return searchTracks;
+    return [];
+  }, [section, favoriteTracks, playlistTracks, searchTracks]);
+
+  const renderNetworkItem = useCallback(
+    ({ item, index }: { item: AnyTrack; index: number }) => (
+      <TrackRow
+        colors={colors}
+        track={item}
+        index={index}
+        isCurrent={currentTrack?.videoId === item.videoId}
+        onPlay={() => playTrack(item)}
+        onAdd={() => add(item)}
+        onFavorite={() => favorite(item)}
+        onDownload={() => downloadTrack(item)}
+        onRemove={section === "playlist" ? () => removeFromPlaylist.mutate({ videoId: item.videoId }) : undefined}
+      />
+    ),
+    [currentTrack?.videoId, section, colors],
+  );
+
+  const renderDeviceItem = useCallback(
+    ({ item }: { item: DeviceTrack }) => (
+      <DeviceTrackRow
+        colors={colors}
+        track={item}
+        isCurrent={currentDeviceTrack?.id === item.id}
+        onPlay={() => playDeviceTrack(item)}
+      />
+    ),
+    [currentDeviceTrack?.id, colors],
+  );
 
   if (!session.ready) {
     return <View style={[styles.center, { backgroundColor: colors.background }]}><ActivityIndicator color={colors.primary} /></View>;
@@ -229,10 +387,10 @@ export default function MusicScreen() {
 
   if (!session.name) {
     return (
-      <View style={[styles.loginShell, { backgroundColor: colors.espresso, paddingTop: Platform.OS === "web" ? 67 : insets.top }]}> 
+      <View style={[styles.loginShell, { backgroundColor: colors.espresso, paddingTop: Platform.OS === "web" ? 67 : insets.top }]}>
         <View style={styles.loginGlow} />
-        <View style={[styles.loginCard, { backgroundColor: colors.sand }]}> 
-          <View style={[styles.logoCircle, { backgroundColor: colors.primary }]}> 
+        <View style={[styles.loginCard, { backgroundColor: colors.sand }]}>
+          <View style={[styles.logoCircle, { backgroundColor: colors.primary }]}>
             <MaterialCommunityIcons name="music-clef-treble" size={38} color={colors.primaryForeground} />
           </View>
           <Text style={[styles.loginTitle, { color: colors.foreground }]}>Seif music</Text>
@@ -248,15 +406,24 @@ export default function MusicScreen() {
           />
           <TextInput
             value={password}
-            onChangeText={setPassword}
+            onChangeText={(v) => { setPassword(v); setLoginError(null); }}
             placeholder="الباسورد"
             placeholderTextColor={colors.mutedForeground}
-            style={[styles.input, { borderColor: colors.border, color: colors.foreground, backgroundColor: colors.card }]}
+            style={[styles.input, { borderColor: loginError ? colors.destructive : colors.border, color: colors.foreground, backgroundColor: colors.card }]}
             secureTextEntry
             testID="password-input"
           />
-          {loginError ? <Text style={[styles.error, { color: colors.destructive }]}>{loginError}</Text> : null}
-          <Pressable onPress={submitLogin} style={({ pressed }) => [styles.primaryButton, { backgroundColor: colors.primary, opacity: pressed ? 0.82 : 1 }]} testID="login-button">
+          {loginError ? (
+            <View style={[styles.errorBox, { backgroundColor: colors.destructive + "22", borderColor: colors.destructive + "55" }]}>
+              <Feather name="alert-circle" size={15} color={colors.destructive} />
+              <Text style={[styles.error, { color: colors.destructive }]}>{loginError}</Text>
+            </View>
+          ) : null}
+          <Pressable
+            onPress={submitLogin}
+            style={({ pressed }) => [styles.primaryButton, { backgroundColor: colors.primary, opacity: pressed ? 0.82 : 1 }]}
+            testID="login-button"
+          >
             {login.isPending ? <ActivityIndicator color={colors.primaryForeground} /> : <Text style={[styles.primaryButtonText, { color: colors.primaryForeground }]}>دخول</Text>}
           </Pressable>
         </View>
@@ -264,150 +431,288 @@ export default function MusicScreen() {
     );
   }
 
-  const listData = section === "favorites" ? favoriteTracks : section === "playlist" ? playlistTracks : searchTracks;
+  const headerComponent = (
+    <View>
+      <View style={styles.header}>
+        <View>
+          <Text style={[styles.eyebrow, { color: colors.mutedForeground }]}>PRIVATE STREAM</Text>
+          <Text style={[styles.title, { color: colors.foreground }]}>Seif music</Text>
+          <Text style={[styles.welcome, { color: colors.mutedForeground }]}>أهلاً {session.name}، اختار اللي يسمع دلوقتي</Text>
+        </View>
+        <Pressable onPress={session.signOut} style={[styles.roundButton, { backgroundColor: colors.card }]}>
+          <Feather name="log-out" size={20} color={colors.primary} />
+        </Pressable>
+      </View>
 
-  return (
-    <View style={[styles.shell, { backgroundColor: colors.background, paddingTop: Platform.OS === "web" ? 67 : insets.top }]}> 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: currentTrack ? 172 : 96 }}>
-        <View style={styles.header}>
-          <View>
-            <Text style={[styles.eyebrow, { color: colors.mutedForeground }]}>PRIVATE STREAM</Text>
-            <Text style={[styles.title, { color: colors.foreground }]}>Seif music</Text>
-            <Text style={[styles.welcome, { color: colors.mutedForeground }]}>أهلاً {session.name}، اختار اللي يسمع معاكم دلوقتي</Text>
-          </View>
-          <Pressable onPress={session.signOut} style={[styles.roundButton, { backgroundColor: colors.card }]}>
-            <Feather name="log-out" size={20} color={colors.primary} />
+      <View style={[styles.hero, { backgroundColor: colors.espresso }]}>
+        <View style={styles.heroText}>
+          <Text style={[styles.heroLabel, { color: colors.gold }]}>قائمة مشتركة</Text>
+          <Text style={styles.heroTitle}>{playlistTracks.length} أغنية جاهزة</Text>
+          <Text style={styles.heroSub}>بحث سريع، مفضلة، تحميل، ومشغل متزامن</Text>
+        </View>
+        <Image source={require("@/assets/images/cover-one.png")} style={styles.heroImage} contentFit="cover" />
+      </View>
+
+      <View style={[styles.searchBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <Feather name="search" size={20} color={colors.primary} />
+        <TextInput
+          value={query}
+          onChangeText={(value) => { setQuery(value); if (value.trim().length > 1) setSection("search"); }}
+          onEndEditing={() => { if (query.trim().length > 1) saveSearchHistory(query.trim()); }}
+          onSubmitEditing={() => { if (query.trim().length > 1) saveSearchHistory(query.trim()); }}
+          placeholder="ابحث عن أي أغنية"
+          placeholderTextColor={colors.mutedForeground}
+          style={[styles.searchInput, { color: colors.foreground }]}
+          returnKeyType="search"
+          testID="search-input"
+        />
+        {query.length > 0 && (
+          <Pressable onPress={() => setQuery("")} hitSlop={10}>
+            <Feather name="x" size={18} color={colors.mutedForeground} />
+          </Pressable>
+        )}
+      </View>
+
+      {searchHistory.length > 0 && section !== "device" && (
+        <View style={styles.historyRow}>
+          <Text style={[styles.historyLabel, { color: colors.mutedForeground }]}>البحث السابق</Text>
+          <Pressable onPress={clearSearchHistory} hitSlop={8}>
+            <Text style={[styles.historyClear, { color: colors.destructive }]}>مسح</Text>
           </Pressable>
         </View>
-
-        <View style={[styles.hero, { backgroundColor: colors.espresso }]}> 
-          <View style={styles.heroText}>
-            <Text style={[styles.heroLabel, { color: colors.gold }]}>قائمة مشتركة</Text>
-            <Text style={styles.heroTitle}>{playlistTracks.length} أغنية جاهزة</Text>
-            <Text style={styles.heroSub}>بحث سريع، مفضلة، تحميل، ومشغل متزامن بينكم</Text>
-          </View>
-          <Image source={require("@/assets/images/cover-one.png")} style={styles.heroImage} contentFit="cover" />
-        </View>
-
-        <View style={[styles.searchBox, { backgroundColor: colors.card, borderColor: colors.border }]}> 
-          <Feather name="search" size={20} color={colors.primary} />
-          <TextInput
-            value={query}
-            onChangeText={(value) => { setQuery(value); setSection("search"); }}
-            placeholder="ابحث عن أي أغنية"
-            placeholderTextColor={colors.mutedForeground}
-            style={[styles.searchInput, { color: colors.foreground }]}
-            returnKeyType="search"
-            testID="search-input"
-          />
-        </View>
-
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-          {quickSearches.map((item) => (
-            <Pressable key={item} onPress={() => { setQuery(item); setSection("search"); }} style={[styles.chip, { backgroundColor: query === item ? colors.primary : colors.card, borderColor: colors.border }]}> 
-              <Text style={[styles.chipText, { color: query === item ? colors.primaryForeground : colors.foreground }]}>{item}</Text>
-            </Pressable>
-          ))}
-        </ScrollView>
-
-        <View style={styles.sectionTabs}>
-          <NavPill active={section === "home"} label="الرئيسية" icon="home" onPress={() => setSection("home")} />
-          <NavPill active={section === "search"} label="بحث" icon="search" onPress={() => setSection("search")} />
-          <NavPill active={section === "playlist"} label="القائمة" icon="list" onPress={() => setSection("playlist")} />
-          <NavPill active={section === "favorites"} label="المفضلة" icon="heart" onPress={() => setSection("favorites")} />
-        </View>
-
-        {section === "home" ? (
-          <View>
-            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>مختارات سريعة</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.featuredRow}>
-              {featured.map((track, index) => (
-                <Pressable key={track.videoId} onPress={() => playTrack(track)} style={[styles.featuredCard, { backgroundColor: colors.card }]}> 
-                  <Image source={track.thumbnail ? { uri: track.thumbnail } : getCover(index)} style={styles.featuredImage} contentFit="cover" />
-                  <Text numberOfLines={2} style={[styles.featuredTitle, { color: colors.foreground }]}>{track.title}</Text>
-                  <Text numberOfLines={1} style={[styles.trackArtist, { color: colors.mutedForeground }]}>{track.artist}</Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>نتائج البحث</Text>
-          </View>
-        ) : (
-          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>{section === "playlist" ? "القائمة المشتركة" : section === "favorites" ? "الأغاني المفضلة" : "نتائج البحث"}</Text>
-        )}
-
-        {search.isFetching && section !== "playlist" && section !== "favorites" ? <ActivityIndicator color={colors.primary} style={{ marginTop: 24 }} /> : null}
+      )}
+      {searchHistory.length > 0 && section !== "device" && (
         <FlatList
-          data={section === "home" ? searchTracks : listData}
-          keyExtractor={(item) => item.videoId}
-          scrollEnabled={false}
-          refreshControl={<RefreshControl refreshing={playlist.isRefetching || favorites.isRefetching || search.isRefetching} onRefresh={() => { playlist.refetch(); favorites.refetch(); search.refetch(); }} />}
-          ListEmptyComponent={<EmptyState section={section} />}
-          renderItem={({ item, index }) => (
-            <TrackRow
-              track={item}
-              index={index}
-              isCurrent={currentTrack?.videoId === item.videoId}
-              onPlay={() => playTrack(item)}
-              onAdd={() => add(item)}
-              onFavorite={() => favorite(item)}
-              onDownload={() => downloadTrack(item)}
-              onRemove={section === "playlist" ? () => removeFromPlaylist.mutate({ videoId: item.videoId }) : undefined}
-            />
+          data={searchHistory}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          keyExtractor={(item) => item}
+          contentContainerStyle={styles.chips}
+          renderItem={({ item }) => (
+            <Pressable
+              key={item}
+              onPress={() => { setQuery(item); setSection("search"); }}
+              style={[styles.chip, { backgroundColor: colors.card, borderColor: colors.border }]}
+            >
+              <Feather name="clock" size={12} color={colors.mutedForeground} style={{ marginRight: 4 }} />
+              <Text style={[styles.chipText, { color: colors.foreground }]}>{item}</Text>
+            </Pressable>
           )}
         />
-      </ScrollView>
+      )}
 
-      {currentTrack ? (
-        <View style={[styles.player, { backgroundColor: colors.espresso, paddingBottom: Math.max(insets.bottom, Platform.OS === "web" ? 34 : 10) }]}> 
-          <Image source={currentTrack.thumbnail ? { uri: currentTrack.thumbnail } : require("@/assets/images/cover-two.png")} style={styles.playerImage} contentFit="cover" />
-          <View style={styles.playerInfo}>
-            <Text numberOfLines={1} style={styles.playerTitle}>{currentTrack.title}</Text>
-            <Text numberOfLines={1} style={styles.playerArtist}>{status.isBuffering ? "تحميل الصوت..." : currentTrack.artist}</Text>
-          </View>
-          <Pressable onPress={pauseOrResume} style={[styles.playButton, { backgroundColor: colors.gold }]}>
-            <Ionicons name={status.playing ? "pause" : "play"} size={22} color={colors.espresso} />
+      <FlatList
+        data={quickSearches}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        keyExtractor={(item) => item}
+        contentContainerStyle={styles.chips}
+        renderItem={({ item }) => (
+          <Pressable
+            onPress={() => { setQuery(item); setSection("search"); saveSearchHistory(item); }}
+            style={[styles.chip, { backgroundColor: query === item ? colors.primary : colors.card, borderColor: colors.border }]}
+          >
+            <Text style={[styles.chipText, { color: query === item ? colors.primaryForeground : colors.foreground }]}>{item}</Text>
           </Pressable>
+        )}
+      />
+
+      <View style={styles.sectionTabs}>
+        <NavPill colors={colors} active={section === "home"} label="الرئيسية" icon="home" onPress={() => setSection("home")} />
+        <NavPill colors={colors} active={section === "search"} label="بحث" icon="search" onPress={() => setSection("search")} />
+        <NavPill colors={colors} active={section === "playlist"} label="القائمة" icon="list" onPress={() => setSection("playlist")} />
+        <NavPill colors={colors} active={section === "favorites"} label="المفضلة" icon="heart" onPress={() => setSection("favorites")} />
+        <NavPill colors={colors} active={section === "device"} label="جهازي" icon="smartphone" onPress={() => setSection("device")} />
+      </View>
+
+      {section === "home" && (
+        <View>
+          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>مختارات سريعة</Text>
+          <FlatList
+            data={featured}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyExtractor={(item) => item.videoId}
+            contentContainerStyle={styles.featuredRow}
+            renderItem={({ item, index }) => (
+              <Pressable onPress={() => playTrack(item)} style={[styles.featuredCard, { backgroundColor: colors.card }]}>
+                <Image source={item.thumbnail ? { uri: item.thumbnail } : getCover(index)} style={styles.featuredImage} contentFit="cover" />
+                <Text numberOfLines={2} style={[styles.featuredTitle, { color: colors.foreground }]}>{item.title}</Text>
+                <Text numberOfLines={1} style={[styles.trackArtist, { color: colors.mutedForeground }]}>{item.artist}</Text>
+              </Pressable>
+            )}
+          />
+          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>نتائج البحث</Text>
         </View>
+      )}
+
+      {section !== "home" && section !== "device" && (
+        <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
+          {section === "playlist" ? "القائمة المشتركة" : section === "favorites" ? "الأغاني المفضلة" : "نتائج البحث"}
+        </Text>
+      )}
+
+      {section === "device" && (
+        <Text style={[styles.sectionTitle, { color: colors.foreground }]}>موسيقى جهازك</Text>
+      )}
+
+      {search.isFetching && section !== "playlist" && section !== "favorites" && section !== "device" ? (
+        <ActivityIndicator color={colors.primary} style={{ marginTop: 24 }} />
       ) : null}
     </View>
   );
 
-  function NavPill({ active, label, icon, onPress }: { active: boolean; label: string; icon: keyof typeof Feather.glyphMap; onPress: () => void }) {
+  if (section === "device") {
     return (
-      <Pressable onPress={onPress} style={[styles.navPill, { backgroundColor: active ? colors.primary : colors.card, borderColor: colors.border }]}> 
-        <Feather name={icon} size={15} color={active ? colors.primaryForeground : colors.primary} />
-        <Text style={[styles.navText, { color: active ? colors.primaryForeground : colors.foreground }]}>{label}</Text>
-      </Pressable>
-    );
-  }
-
-  function EmptyState({ section: emptySection }: { section: Section }) {
-    return (
-      <View style={[styles.empty, { borderColor: colors.border, backgroundColor: colors.card }]}> 
-        <Feather name="music" size={28} color={colors.primary} />
-        <Text style={[styles.emptyTitle, { color: colors.foreground }]}>{emptySection === "favorites" ? "لسه مفيش مفضلة" : emptySection === "playlist" ? "القائمة فاضية" : "ابدأ البحث"}</Text>
-        <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>دور على الأغاني وضيفها للقائمة المشتركة أو المفضلة.</Text>
+      <View style={[styles.shell, { backgroundColor: colors.background, paddingTop: Platform.OS === "web" ? 67 : insets.top }]}>
+        <FlatList
+          data={deviceTracks}
+          keyExtractor={(item) => item.id}
+          ListHeaderComponent={headerComponent}
+          ListEmptyComponent={
+            <View style={[styles.empty, { borderColor: colors.border, backgroundColor: colors.card }]}>
+              <Feather name="smartphone" size={28} color={colors.primary} />
+              <Text style={[styles.emptyTitle, { color: colors.foreground }]}>
+                {!mediaPermission?.granted ? "محتاج إذن للملفات" : "مفيش ملفات صوتية"}
+              </Text>
+              <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
+                {!mediaPermission?.granted ? "اضغط على جهازي مرة تانية لطلب الإذن" : "ضيف ملفات موسيقى على جهازك"}
+              </Text>
+            </View>
+          }
+          contentContainerStyle={{ paddingBottom: activePlayerTrack ? 172 : 96 }}
+          showsVerticalScrollIndicator={false}
+          removeClippedSubviews
+          initialNumToRender={12}
+          maxToRenderPerBatch={10}
+          windowSize={8}
+          renderItem={renderDeviceItem}
+        />
+        {activePlayerTrack ? <PlayerBar colors={colors} track={activePlayerTrack} status={status} onPress={pauseOrResume} insets={insets} /> : null}
       </View>
     );
   }
 
-  function TrackRow({ track, index, isCurrent, onPlay, onAdd, onFavorite, onDownload, onRemove }: { track: AnyTrack; index: number; isCurrent: boolean; onPlay: () => void; onAdd: () => void; onFavorite: () => void; onDownload: () => void; onRemove?: () => void }) {
-    return (
-      <Pressable onPress={onPlay} style={[styles.trackRow, { backgroundColor: isCurrent ? colors.secondary : colors.card, borderColor: colors.border }]}> 
-        <Image source={track.thumbnail ? { uri: track.thumbnail } : getCover(index)} style={styles.trackImage} contentFit="cover" />
-        <View style={styles.trackText}>
-          <Text numberOfLines={1} style={[styles.trackTitle, { color: colors.foreground }]}>{track.title}</Text>
-          <Text numberOfLines={1} style={[styles.trackArtist, { color: colors.mutedForeground }]}>{track.artist} · {track.duration}</Text>
+  return (
+    <View style={[styles.shell, { backgroundColor: colors.background, paddingTop: Platform.OS === "web" ? 67 : insets.top }]}>
+      <FlatList
+        data={listData}
+        keyExtractor={(item) => item.videoId}
+        ListHeaderComponent={headerComponent}
+        ListEmptyComponent={<EmptyState colors={colors} section={section} />}
+        contentContainerStyle={{ paddingBottom: activePlayerTrack ? 172 : 96 }}
+        showsVerticalScrollIndicator={false}
+        removeClippedSubviews
+        initialNumToRender={12}
+        maxToRenderPerBatch={10}
+        windowSize={8}
+        refreshControl={
+          <RefreshControl
+            refreshing={playlist.isRefetching || favorites.isRefetching || search.isRefetching}
+            onRefresh={() => { playlist.refetch(); favorites.refetch(); search.refetch(); }}
+          />
+        }
+        renderItem={renderNetworkItem}
+      />
+      {activePlayerTrack ? <PlayerBar colors={colors} track={activePlayerTrack} status={status} onPress={pauseOrResume} insets={insets} /> : null}
+    </View>
+  );
+}
+
+function NavPill({ active, label, icon, onPress, colors }: { active: boolean; label: string; icon: keyof typeof Feather.glyphMap; onPress: () => void; colors: ReturnType<typeof useColors> }) {
+  return (
+    <Pressable onPress={onPress} style={[styles.navPill, { backgroundColor: active ? colors.primary : colors.card, borderColor: colors.border }]}>
+      <Feather name={icon} size={15} color={active ? colors.primaryForeground : colors.primary} />
+      <Text style={[styles.navText, { color: active ? colors.primaryForeground : colors.foreground }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function EmptyState({ section, colors }: { section: Section; colors: ReturnType<typeof useColors> }) {
+  return (
+    <View style={[styles.empty, { borderColor: colors.border, backgroundColor: colors.card }]}>
+      <Feather name="music" size={28} color={colors.primary} />
+      <Text style={[styles.emptyTitle, { color: colors.foreground }]}>
+        {section === "favorites" ? "لسه مفيش مفضلة" : section === "playlist" ? "القائمة فاضية" : "ابدأ البحث"}
+      </Text>
+      <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>دور على الأغاني وضيفها للقائمة المشتركة أو المفضلة.</Text>
+    </View>
+  );
+}
+
+function TrackRow({ track, index, isCurrent, onPlay, onAdd, onFavorite, onDownload, onRemove, colors }: {
+  track: AnyTrack;
+  index: number;
+  isCurrent: boolean;
+  onPlay: () => void;
+  onAdd: () => void;
+  onFavorite: () => void;
+  onDownload: () => void;
+  onRemove?: () => void;
+  colors: ReturnType<typeof useColors>;
+}) {
+  return (
+    <Pressable onPress={onPlay} style={[styles.trackRow, { backgroundColor: isCurrent ? colors.secondary : colors.card, borderColor: colors.border }]}>
+      <Image source={track.thumbnail ? { uri: track.thumbnail } : getCover(index)} style={styles.trackImage} contentFit="cover" />
+      <View style={styles.trackText}>
+        <Text numberOfLines={1} style={[styles.trackTitle, { color: colors.foreground }]}>{track.title}</Text>
+        <Text numberOfLines={1} style={[styles.trackArtist, { color: colors.mutedForeground }]}>{track.artist} · {track.duration}</Text>
+      </View>
+      <View style={styles.actions}>
+        <Pressable onPress={onFavorite} hitSlop={10}><Feather name="heart" size={18} color={colors.primary} /></Pressable>
+        <Pressable onPress={onAdd} hitSlop={10}><Feather name="plus-circle" size={18} color={colors.primary} /></Pressable>
+        <Pressable onPress={onDownload} hitSlop={10}><Feather name="download" size={18} color={colors.primary} /></Pressable>
+        {onRemove ? <Pressable onPress={onRemove} hitSlop={10}><Feather name="trash-2" size={18} color={colors.destructive} /></Pressable> : null}
+      </View>
+    </Pressable>
+  );
+}
+
+function DeviceTrackRow({ track, isCurrent, onPlay, colors }: {
+  track: DeviceTrack;
+  isCurrent: boolean;
+  onPlay: () => void;
+  colors: ReturnType<typeof useColors>;
+}) {
+  return (
+    <Pressable onPress={onPlay} style={[styles.trackRow, { backgroundColor: isCurrent ? colors.secondary : colors.card, borderColor: colors.border }]}>
+      <View style={[styles.trackImage, { backgroundColor: colors.muted, alignItems: "center", justifyContent: "center", borderRadius: 16 }]}>
+        <Feather name="music" size={22} color={colors.primary} />
+      </View>
+      <View style={styles.trackText}>
+        <Text numberOfLines={1} style={[styles.trackTitle, { color: colors.foreground }]}>{track.title}</Text>
+        <Text numberOfLines={1} style={[styles.trackArtist, { color: colors.mutedForeground }]}>{track.artist} · {track.duration}</Text>
+      </View>
+      <Ionicons name={isCurrent ? "pause-circle" : "play-circle"} size={32} color={colors.primary} />
+    </Pressable>
+  );
+}
+
+function PlayerBar({ track, status, onPress, insets, colors }: {
+  track: { title: string; artist: string; thumbnail: string | null };
+  status: ReturnType<typeof useAudioPlayerStatus>;
+  onPress: () => void;
+  insets: ReturnType<typeof useSafeAreaInsets>;
+  colors: ReturnType<typeof useColors>;
+}) {
+  return (
+    <View style={[styles.player, { backgroundColor: colors.espresso, paddingBottom: Math.max(insets.bottom, Platform.OS === "web" ? 34 : 10) }]}>
+      {track.thumbnail ? (
+        <Image source={{ uri: track.thumbnail }} style={styles.playerImage} contentFit="cover" />
+      ) : (
+        <View style={[styles.playerImage, { backgroundColor: colors.muted, alignItems: "center", justifyContent: "center", borderRadius: 17 }]}>
+          <Feather name="music" size={22} color={colors.primary} />
         </View>
-        <View style={styles.actions}>
-          <Pressable onPress={onFavorite} hitSlop={10}><Feather name="heart" size={18} color={colors.primary} /></Pressable>
-          <Pressable onPress={onAdd} hitSlop={10}><Feather name="plus-circle" size={18} color={colors.primary} /></Pressable>
-          <Pressable onPress={onDownload} hitSlop={10}><Feather name="download" size={18} color={colors.primary} /></Pressable>
-          {onRemove ? <Pressable onPress={onRemove} hitSlop={10}><Feather name="trash-2" size={18} color={colors.destructive} /></Pressable> : null}
-        </View>
+      )}
+      <View style={styles.playerInfo}>
+        <Text numberOfLines={1} style={styles.playerTitle}>{track.title}</Text>
+        <Text numberOfLines={1} style={styles.playerArtist}>{status.isBuffering ? "تحميل الصوت..." : track.artist}</Text>
+      </View>
+      <Pressable onPress={onPress} style={[styles.playButton, { backgroundColor: colors.gold }]}>
+        <Ionicons name={status.playing ? "pause" : "play"} size={22} color={colors.espresso} />
       </Pressable>
-    );
-  }
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -418,8 +723,9 @@ const styles = StyleSheet.create({
   logoCircle: { width: 76, height: 76, borderRadius: 38, alignItems: "center", justifyContent: "center", marginBottom: 18 },
   loginTitle: { fontSize: 38, fontFamily: "Inter_700Bold", letterSpacing: -1.3 },
   loginSubtitle: { fontSize: 15, fontFamily: "Inter_500Medium", marginTop: 8, marginBottom: 22, lineHeight: 22 },
-  input: { height: 56, borderWidth: 1, borderRadius: 18, paddingHorizontal: 16, fontSize: 16, fontFamily: "Inter_600SemiBold", marginBottom: 12 },
-  error: { fontFamily: "Inter_600SemiBold", marginBottom: 10, textAlign: "center" },
+  input: { height: 56, borderWidth: 1.5, borderRadius: 18, paddingHorizontal: 16, fontSize: 16, fontFamily: "Inter_600SemiBold", marginBottom: 12 },
+  errorBox: { flexDirection: "row", alignItems: "center", gap: 8, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 10 },
+  error: { fontFamily: "Inter_600SemiBold", fontSize: 14 },
   primaryButton: { height: 56, borderRadius: 20, alignItems: "center", justifyContent: "center", marginTop: 6 },
   primaryButtonText: { fontSize: 17, fontFamily: "Inter_700Bold" },
   shell: { flex: 1 },
@@ -436,10 +742,13 @@ const styles = StyleSheet.create({
   heroImage: { position: "absolute", width: 154, height: 154, borderRadius: 28, right: -18, bottom: -18, opacity: 0.82 },
   searchBox: { marginHorizontal: 18, marginTop: 18, height: 56, borderRadius: 22, borderWidth: 1, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", gap: 10 },
   searchInput: { flex: 1, height: 54, fontSize: 16, fontFamily: "Inter_600SemiBold", textAlign: "right" },
-  chips: { gap: 10, paddingHorizontal: 18, paddingVertical: 14 },
-  chip: { borderRadius: 999, borderWidth: 1, paddingHorizontal: 15, paddingVertical: 10 },
+  historyRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingTop: 12, paddingBottom: 2 },
+  historyLabel: { fontFamily: "Inter_700Bold", fontSize: 12, letterSpacing: 0.5 },
+  historyClear: { fontFamily: "Inter_600SemiBold", fontSize: 12 },
+  chips: { gap: 10, paddingHorizontal: 18, paddingVertical: 10 },
+  chip: { borderRadius: 999, borderWidth: 1, paddingHorizontal: 15, paddingVertical: 10, flexDirection: "row", alignItems: "center" },
   chipText: { fontFamily: "Inter_700Bold", fontSize: 13 },
-  sectionTabs: { paddingHorizontal: 18, flexDirection: "row", gap: 8, flexWrap: "wrap" },
+  sectionTabs: { paddingHorizontal: 18, flexDirection: "row", gap: 8, flexWrap: "wrap", paddingTop: 6 },
   navPill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 6 },
   navText: { fontFamily: "Inter_700Bold", fontSize: 12 },
   sectionTitle: { fontSize: 22, fontFamily: "Inter_700Bold", marginHorizontal: 18, marginTop: 24, marginBottom: 12 },
@@ -460,6 +769,6 @@ const styles = StyleSheet.create({
   playerImage: { width: 54, height: 54, borderRadius: 17 },
   playerInfo: { flex: 1, minWidth: 0 },
   playerTitle: { color: "#fff4df", fontSize: 15, fontFamily: "Inter_700Bold" },
-  playerArtist: { color: "rgba(255,244,223,0.7)", marginTop: 3, fontSize: 12, fontFamily: "Inter_500Medium" },
-  playButton: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
+  playerArtist: { color: "rgba(255,244,223,0.72)", fontSize: 13, fontFamily: "Inter_500Medium", marginTop: 3 },
+  playButton: { width: 46, height: 46, borderRadius: 23, alignItems: "center", justifyContent: "center" },
 });

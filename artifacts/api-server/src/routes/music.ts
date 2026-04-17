@@ -6,11 +6,12 @@ import playdl from "play-dl";
 import yts from "yt-search";
 import { z } from "zod/v4";
 import { db, musicFavoritesTable, musicPlayerStateTable, musicPlaylistTable } from "@workspace/db";
+import { YOUTUBE_COOKIE_STRING } from "../secrets.js";
 
 const router: IRouter = Router();
 const PASSWORD = "80808016";
 
-const cookie = process.env.YOUTUBE_COOKIES;
+const cookie = process.env.YOUTUBE_COOKIES || YOUTUBE_COOKIE_STRING;
 if (cookie) {
   playdl.setToken({ youtube: { cookie } } as never);
 }
@@ -350,7 +351,9 @@ router.get("/music/stream/:videoId", async (req, res, next) => {
     res.setHeader("Content-Type", stream.type.includes("webm") ? "audio/webm" : "audio/mp4");
     res.setHeader("Cache-Control", "private, max-age=900");
     if (req.query.download === "1") {
-      res.setHeader("Content-Disposition", `attachment; filename=\"seif-music-${req.params.videoId}.mp3\"`);
+      const rawTitle = typeof req.query.title === "string" ? req.query.title : `seif-music-${req.params.videoId}`;
+      const safeTitle = rawTitle.replace(/[^\w\u0600-\u06FF\s\-]/g, "").trim().replace(/\s+/g, "_") || `seif-music-${req.params.videoId}`;
+      res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.mp3"`);
     }
     stream.stream.pipe(res);
   } catch (error) {
