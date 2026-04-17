@@ -14,3 +14,170 @@ import * as zod from "zod";
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
 });
+
+/**
+ * @summary Login to private music app
+ */
+export const MusicLoginBody = zod.object({
+  name: zod.string(),
+  password: zod.string(),
+});
+
+export const MusicLoginResponse = zod.object({
+  ok: zod.boolean(),
+  name: zod.string(),
+});
+
+/**
+ * @summary Search tracks
+ */
+export const SearchTracksQueryParams = zod.object({
+  q: zod.coerce.string(),
+});
+
+export const SearchTracksResponse = zod.object({
+  tracks: zod.array(
+    zod.object({
+      videoId: zod.string(),
+      title: zod.string(),
+      artist: zod.string(),
+      duration: zod.string(),
+      thumbnail: zod.string().nullish(),
+      streamUrl: zod.string(),
+    }),
+  ),
+});
+
+/**
+ * @summary Get shared playlist
+ */
+export const GetPlaylistResponse = zod.object({
+  tracks: zod.array(
+    zod
+      .object({
+        videoId: zod.string(),
+        title: zod.string(),
+        artist: zod.string(),
+        duration: zod.string(),
+        thumbnail: zod.string().nullish(),
+        streamUrl: zod.string(),
+      })
+      .and(
+        zod.object({
+          addedBy: zod.string(),
+          addedAt: zod.string(),
+          isFavorite: zod.boolean(),
+        }),
+      ),
+  ),
+});
+
+/**
+ * @summary Add track to shared playlist
+ */
+export const AddToPlaylistBody = zod.object({
+  videoId: zod.string(),
+  title: zod.string(),
+  artist: zod.string(),
+  duration: zod.string(),
+  thumbnail: zod.string().nullish(),
+  addedBy: zod.string(),
+});
+
+export const AddToPlaylistResponse = zod
+  .object({
+    videoId: zod.string(),
+    title: zod.string(),
+    artist: zod.string(),
+    duration: zod.string(),
+    thumbnail: zod.string().nullish(),
+    streamUrl: zod.string(),
+  })
+  .and(
+    zod.object({
+      addedBy: zod.string(),
+      addedAt: zod.string(),
+      isFavorite: zod.boolean(),
+    }),
+  );
+
+/**
+ * @summary Remove track from playlist
+ */
+export const RemoveFromPlaylistParams = zod.object({
+  videoId: zod.coerce.string(),
+});
+
+export const RemoveFromPlaylistResponse = zod.object({
+  ok: zod.boolean(),
+});
+
+/**
+ * @summary Get favorite tracks
+ */
+export const GetFavoritesResponse = zod.object({
+  tracks: zod.array(
+    zod
+      .object({
+        videoId: zod.string(),
+        title: zod.string(),
+        artist: zod.string(),
+        duration: zod.string(),
+        thumbnail: zod.string().nullish(),
+        streamUrl: zod.string(),
+      })
+      .and(
+        zod.object({
+          createdAt: zod.string(),
+        }),
+      ),
+  ),
+});
+
+/**
+ * @summary Toggle favorite track
+ */
+export const ToggleFavoriteParams = zod.object({
+  videoId: zod.coerce.string(),
+});
+
+export const ToggleFavoriteBody = zod.object({
+  videoId: zod.string(),
+  title: zod.string(),
+  artist: zod.string(),
+  duration: zod.string(),
+  thumbnail: zod.string().nullish(),
+  addedBy: zod.string(),
+});
+
+export const ToggleFavoriteResponse = zod.object({
+  isFavorite: zod.boolean(),
+});
+
+/**
+ * @summary Get synchronized player state
+ */
+export const GetPlayerStateResponse = zod.object({
+  currentVideoId: zod.string().nullish(),
+  isPlaying: zod.boolean(),
+  updatedBy: zod.string().nullish(),
+  updatedAt: zod.string(),
+  streamUrl: zod.string().nullish(),
+});
+
+/**
+ * @summary Update synchronized player state
+ */
+export const UpdatePlayerStateBody = zod.object({
+  currentVideoId: zod.string().nullish(),
+  isPlaying: zod.boolean(),
+  updatedBy: zod.string().optional(),
+});
+
+export const UpdatePlayerStateResponse = zod.object({
+  currentVideoId: zod.string().nullish(),
+  isPlaying: zod.boolean(),
+  updatedBy: zod.string().nullish(),
+  updatedAt: zod.string(),
+  streamUrl: zod.string().nullish(),
+});

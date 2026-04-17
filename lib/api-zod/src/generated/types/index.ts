@@ -6,4 +6,19 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from "./addTrackRequest";
+export * from "./errorResponse";
+export * from "./favoriteTrack";
+export * from "./getFavorites200";
+export * from "./getPlaylist200";
 export * from "./healthStatus";
+export * from "./loginRequest";
+export * from "./loginResponse";
+export * from "./playerState";
+export * from "./playlistTrack";
+export * from "./removeFromPlaylist200";
+export * from "./searchTracks200";
+export * from "./searchTracksParams";
+export * from "./toggleFavorite200";
+export * from "./track";
+export * from "./updatePlayerStateRequest";

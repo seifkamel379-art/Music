@@ -8,3 +8,83 @@
 export interface HealthStatus {
   status: string;
 }
+
+export interface ErrorResponse {
+  message: string;
+}
+
+export interface LoginRequest {
+  name: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  ok: boolean;
+  name: string;
+}
+
+export interface Track {
+  videoId: string;
+  title: string;
+  artist: string;
+  duration: string;
+  thumbnail?: string | null;
+  streamUrl: string;
+}
+
+export type PlaylistTrack = Track & {
+  addedBy: string;
+  addedAt: string;
+  isFavorite: boolean;
+};
+
+export type FavoriteTrack = Track & {
+  createdAt: string;
+};
+
+export interface AddTrackRequest {
+  videoId: string;
+  title: string;
+  artist: string;
+  duration: string;
+  thumbnail?: string | null;
+  addedBy: string;
+}
+
+export interface PlayerState {
+  currentVideoId?: string | null;
+  isPlaying: boolean;
+  updatedBy?: string | null;
+  updatedAt: string;
+  streamUrl?: string | null;
+}
+
+export interface UpdatePlayerStateRequest {
+  currentVideoId?: string | null;
+  isPlaying: boolean;
+  updatedBy?: string;
+}
+
+export type SearchTracksParams = {
+  q: string;
+};
+
+export type SearchTracks200 = {
+  tracks: Track[];
+};
+
+export type GetPlaylist200 = {
+  tracks: PlaylistTrack[];
+};
+
+export type RemoveFromPlaylist200 = {
+  ok: boolean;
+};
+
+export type GetFavorites200 = {
+  tracks: FavoriteTrack[];
+};
+
+export type ToggleFavorite200 = {
+  isFavorite: boolean;
+};

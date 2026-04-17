@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: music
+    description: Music app operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,186 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /music/login:
+    post:
+      operationId: musicLogin
+      tags: [music]
+      summary: Login to private music app
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Invalid password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /music/search:
+    get:
+      operationId: searchTracks
+      tags: [music]
+      summary: Search tracks
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tracks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Track"
+                required: [tracks]
+  /music/playlist:
+    get:
+      operationId: getPlaylist
+      tags: [music]
+      summary: Get shared playlist
+      responses:
+        "200":
+          description: Shared playlist
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tracks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PlaylistTrack"
+                required: [tracks]
+    post:
+      operationId: addToPlaylist
+      tags: [music]
+      summary: Add track to shared playlist
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddTrackRequest"
+      responses:
+        "200":
+          description: Updated track
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlaylistTrack"
+  /music/playlist/{videoId}:
+    delete:
+      operationId: removeFromPlaylist
+      tags: [music]
+      summary: Remove track from playlist
+      parameters:
+        - name: videoId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                required: [ok]
+  /music/favorites:
+    get:
+      operationId: getFavorites
+      tags: [music]
+      summary: Get favorite tracks
+      responses:
+        "200":
+          description: Favorites
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tracks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/FavoriteTrack"
+                required: [tracks]
+  /music/favorites/{videoId}:
+    post:
+      operationId: toggleFavorite
+      tags: [music]
+      summary: Toggle favorite track
+      parameters:
+        - name: videoId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddTrackRequest"
+      responses:
+        "200":
+          description: Favorite status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  isFavorite:
+                    type: boolean
+                required: [isFavorite]
+  /music/player:
+    get:
+      operationId: getPlayerState
+      tags: [music]
+      summary: Get synchronized player state
+      responses:
+        "200":
+          description: Player state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlayerState"
+    put:
+      operationId: updatePlayerState
+      tags: [music]
+      summary: Update synchronized player state
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePlayerStateRequest"
+      responses:
+        "200":
+          description: Player state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlayerState"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +215,107 @@ components:
           type: string
       required:
         - status
-
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+      required: [message]
+    LoginRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        password:
+          type: string
+      required: [name, password]
+    LoginResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        name:
+          type: string
+      required: [ok, name]
+    Track:
+      type: object
+      properties:
+        videoId:
+          type: string
+        title:
+          type: string
+        artist:
+          type: string
+        duration:
+          type: string
+        thumbnail:
+          type: string
+          nullable: true
+        streamUrl:
+          type: string
+      required: [videoId, title, artist, duration, streamUrl]
+    PlaylistTrack:
+      allOf:
+        - $ref: "#/components/schemas/Track"
+        - type: object
+          properties:
+            addedBy:
+              type: string
+            addedAt:
+              type: string
+            isFavorite:
+              type: boolean
+          required: [addedBy, addedAt, isFavorite]
+    FavoriteTrack:
+      allOf:
+        - $ref: "#/components/schemas/Track"
+        - type: object
+          properties:
+            createdAt:
+              type: string
+          required: [createdAt]
+    AddTrackRequest:
+      type: object
+      properties:
+        videoId:
+          type: string
+        title:
+          type: string
+        artist:
+          type: string
+        duration:
+          type: string
+        thumbnail:
+          type: string
+          nullable: true
+        addedBy:
+          type: string
+      required: [videoId, title, artist, duration, addedBy]
+    PlayerState:
+      type: object
+      properties:
+        currentVideoId:
+          type: string
+          nullable: true
+        isPlaying:
+          type: boolean
+        updatedBy:
+          type: string
+          nullable: true
+        updatedAt:
+          type: string
+        streamUrl:
+          type: string
+          nullable: true
+      required: [isPlaying, updatedAt]
+    UpdatePlayerStateRequest:
+      type: object
+      properties:
+        currentVideoId:
+          type: string
+          nullable: true
+        isPlaying:
+          type: boolean
+        updatedBy:
+          type: string
+      required: [isPlaying]

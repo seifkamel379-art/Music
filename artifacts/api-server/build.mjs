@@ -100,6 +100,9 @@ async function buildAll() {
       "puppeteer",
       "puppeteer-core",
       "electron",
+      "play-opus",
+      "opusscript",
+      "yt-search",
     ],
     sourcemap: "linked",
     plugins: [
