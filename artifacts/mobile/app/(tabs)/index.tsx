@@ -114,6 +114,7 @@ export default function MusicScreen() {
 
   useEffect(() => {
     if (section !== "device") return;
+    if (Platform.OS === "web") return;
     if (mediaPermission?.granted) {
       loadDeviceTracks();
     } else {
@@ -235,7 +236,7 @@ export default function MusicScreen() {
           <View style={[styles.logoCircle, { backgroundColor: colors.primary }]}>
             <MaterialCommunityIcons name="music-clef-treble" size={38} color={colors.primaryForeground} />
           </View>
-          <Text style={[styles.loginTitle, { color: colors.foreground }]}>Seif music</Text>
+          <Text style={[styles.loginTitle, { color: colors.foreground }]}>music&sk</Text>
           <Text style={[styles.loginSubtitle, { color: colors.mutedForeground }]}>مساحتك الخاصة للمزيكا</Text>
           <TextInput
             value={loginName}
@@ -273,7 +274,7 @@ export default function MusicScreen() {
       <View style={styles.header}>
         <View>
           <Text style={[styles.eyebrow, { color: colors.mutedForeground }]}>PRIVATE STREAM</Text>
-          <Text style={[styles.title, { color: colors.foreground }]}>Seif music</Text>
+          <Text style={[styles.title, { color: colors.foreground }]}>music&sk</Text>
           <Text style={[styles.welcome, { color: colors.mutedForeground }]}>أهلاً {session.name} 👋</Text>
         </View>
         <Pressable onPress={session.signOut} style={[styles.roundBtn, { backgroundColor: colors.card }]}>
@@ -399,10 +400,24 @@ export default function MusicScreen() {
     <View style={[styles.empty, { borderColor: colors.border, backgroundColor: colors.card }]}>
       <Feather name={section === "device" ? "smartphone" : "music"} size={28} color={colors.primary} />
       <Text style={[styles.emptyTitle, { color: colors.foreground }]}>
-        {section === "favorites" ? "لسه مفيش مفضلة" : section === "playlist" ? "القائمة فاضية" : section === "device" ? (!mediaPermission?.granted ? "محتاج إذن للملفات" : "مفيش ملفات صوتية") : "ابدأ البحث"}
+        {section === "favorites"
+          ? "لسه مفيش مفضلة"
+          : section === "playlist"
+          ? "القائمة فاضية"
+          : section === "device"
+          ? Platform.OS === "web"
+            ? "افتح التطبيق من جهازك"
+            : !mediaPermission?.granted
+            ? "محتاج إذن للملفات"
+            : "مفيش ملفات صوتية"
+          : "ابدأ البحث"}
       </Text>
       <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
-        {section === "device" ? "اضغط على جهازي مرة تانية لو مش ظاهر إذن" : "دور على الأغاني وضيفها للقائمة أو المفضلة"}
+        {section === "device"
+          ? Platform.OS === "web"
+            ? "موسيقى الجهاز بتشتغل بس على تطبيق الموبايل"
+            : "اضغط على جهازي مرة تانية لو مش ظاهر إذن"
+          : "دور على الأغاني وضيفها للقائمة أو المفضلة"}
       </Text>
     </View>
   );

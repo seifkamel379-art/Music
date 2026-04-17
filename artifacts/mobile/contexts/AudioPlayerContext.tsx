@@ -112,6 +112,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   }
 
   function seekTo(seconds: number) {
+    if (!isFinite(seconds) || isNaN(seconds) || seconds < 0) return;
     player.seekTo(seconds);
   }
 

@@ -91,10 +91,12 @@ export default function PlayerModal() {
         <Pressable
           style={styles.progressBarOuter}
           onPress={(e) => {
+            if (!duration || !isFinite(duration) || duration <= 0) return;
             const { locationX } = e.nativeEvent;
-            const barWidth = SCREEN_WIDTH - 48;
+            const barWidth = Math.max(1, SCREEN_WIDTH - 48);
             const ratio = Math.max(0, Math.min(1, locationX / barWidth));
-            seekTo(ratio * duration);
+            const target = ratio * duration;
+            if (isFinite(target) && target >= 0) seekTo(target);
           }}
         >
           <View style={[styles.progressBarBg, { backgroundColor: "rgba(255,244,223,0.15)" }]}>
