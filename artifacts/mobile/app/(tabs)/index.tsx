@@ -25,6 +25,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAudioPlayer, type PlayerTrack } from "@/contexts/AudioPlayerContext";
 import { useLocalMusic } from "@/contexts/LocalMusicContext";
 import { useSession } from "@/contexts/SessionContext";
+import { useTheme } from "@/contexts/ThemeContext";
 import { useColors } from "@/hooks/useColors";
 
 type Section = "home" | "search" | "playlist" | "favorites" | "device";
@@ -95,6 +96,16 @@ function triggerWebDownload(url: string, filename: string) {
   return true;
 }
 
+function getChromeIntentUrl(url: string) {
+  const scheme = url.startsWith("http://") ? "http" : "https";
+  const withoutScheme = url.replace(/^https?:\/\//, "");
+  return `intent://${withoutScheme}#Intent;scheme=${scheme};package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(url)};end`;
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function toPlayerTrack(track: { videoId: string; title: string; artist: string; duration: string; thumbnail?: string | null; streamUrl: string }): PlayerTrack {
   return {
     videoId: track.videoId,
@@ -108,6 +119,7 @@ function toPlayerTrack(track: { videoId: string; title: string; artist: string; 
 
 export default function MusicScreen() {
   const colors = useColors();
+  const { themeMode, toggleTheme } = useTheme();
   const insets = useSafeAreaInsets();
   const session = useSession();
   const { addToPlaylist, removeFromPlaylist, toggleFavorite, isFavorite, playlist, favorites, searchHistory, addSearchHistory, clearSearchHistory } = useLocalMusic();
@@ -208,6 +220,15 @@ export default function MusicScreen() {
         if (!silent) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         return;
       }
+      if (Platform.OS === "android") {
+        try {
+          await Linking.openURL(getChromeIntentUrl(url));
+          return;
+        } catch {
+          await Linking.openURL(url);
+          return;
+        }
+      }
       const fs = FileSystem as typeof FileSystem & {
         downloadAsync?: (uri: string, fileUri: string) => Promise<{ uri: string }>;
         documentDirectory?: string | null;
@@ -224,14 +245,6 @@ export default function MusicScreen() {
           return;
         }
       }
-      if (Platform.OS === "android") {
-        const chromeIntent = `intent:${url}#Intent;action=android.intent.action.VIEW;package=com.android.chrome;end`;
-        const canOpen = await Linking.canOpenURL(chromeIntent).catch(() => false);
-        if (canOpen) {
-          await Linking.openURL(chromeIntent);
-          return;
-        }
-      }
       await Linking.openURL(url);
     } catch {
       Alert.alert("خطأ", "تعذّر فتح التحميل");
@@ -241,11 +254,10 @@ export default function MusicScreen() {
   async function downloadPlaylist() {
     if (playlist.length === 0) return;
     const tracks = playlist.map(toPlayerTrack);
-    Alert.alert("تحميل القائمة", `بدأ تحميل ${tracks.length} أغنية. لو المتصفح طلب السماح بتحميلات متعددة وافق عليه.`);
-    for (const [index, track] of tracks.entries()) {
-      setTimeout(() => {
-        downloadTrack(track, true);
-      }, index * 900);
+    Alert.alert("تحميل المكتبة", `هيبدأ تحميل كل أغاني مكتبتك: ${tracks.length} أغنية. وافق على أي طلب من Chrome أو المتصفح.`);
+    for (const track of tracks) {
+      await downloadTrack(track, true);
+      await wait(900);
     }
   }
 
@@ -299,8 +311,11 @@ export default function MusicScreen() {
 
   if (!session.name) {
     return (
-      <View style={[styles.loginShell, { backgroundColor: colors.espresso, paddingTop: Platform.OS === "web" ? 67 : insets.top }]}>
+      <View style={[styles.loginShell, { backgroundColor: colors.background, paddingTop: Platform.OS === "web" ? 67 : insets.top }]}>
         <View style={styles.loginGlow} />
+        <Pressable onPress={toggleTheme} style={[styles.loginThemeBtn, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Feather name={themeMode === "dark" ? "sun" : "moon"} size={20} color={colors.primary} />
+        </Pressable>
         <View style={[styles.loginCard, { backgroundColor: colors.sand }]}>
           <View style={[styles.logoCircle, { backgroundColor: colors.primary }]}>
             <MaterialCommunityIcons name="music-clef-treble" size={38} color={colors.primaryForeground} />
@@ -346,9 +361,14 @@ export default function MusicScreen() {
           <Text style={[styles.title, { color: colors.foreground }]}>music&sk</Text>
           <Text style={[styles.welcome, { color: colors.mutedForeground }]}>أهلاً {session.name}</Text>
         </View>
-        <Pressable onPress={session.signOut} style={[styles.roundBtn, { backgroundColor: colors.card }]}>
-          <Feather name="log-out" size={20} color={colors.primary} />
-        </Pressable>
+        <View style={styles.headerActions}>
+          <Pressable onPress={toggleTheme} style={[styles.roundBtn, { backgroundColor: colors.card }]}>
+            <Feather name={themeMode === "dark" ? "sun" : "moon"} size={20} color={colors.primary} />
+          </Pressable>
+          <Pressable onPress={session.signOut} style={[styles.roundBtn, { backgroundColor: colors.card }]}>
+            <Feather name="log-out" size={20} color={colors.primary} />
+          </Pressable>
+        </View>
       </View>
 
       <View style={[styles.hero, { backgroundColor: colors.espresso }]}>
@@ -619,6 +639,7 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   loginShell: { flex: 1, justifyContent: "center", padding: 22, overflow: "hidden" },
   loginGlow: { position: "absolute", width: 340, height: 340, borderRadius: 170, backgroundColor: "rgba(29,185,84,0.24)", top: 70, right: -120 },
+  loginThemeBtn: { position: "absolute", top: 64, right: 20, width: 46, height: 46, borderRadius: 23, alignItems: "center", justifyContent: "center", borderWidth: 1 },
   loginCard: { borderRadius: 34, padding: 24, shadowColor: "#000", shadowOpacity: 0.22, shadowRadius: 24, elevation: 8 },
   logoCircle: { width: 76, height: 76, borderRadius: 38, alignItems: "center", justifyContent: "center", marginBottom: 18 },
   loginTitle: { fontSize: 38, fontFamily: "Inter_700Bold", letterSpacing: -1.3 },
@@ -630,6 +651,7 @@ const styles = StyleSheet.create({
   primaryBtnText: { fontSize: 17, fontFamily: "Inter_700Bold" },
   shell: { flex: 1 },
   header: { paddingHorizontal: 18, paddingTop: 12, paddingBottom: 14, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 10 },
   eyebrow: { fontSize: 11, fontFamily: "Inter_700Bold", letterSpacing: 1.4 },
   title: { fontSize: 34, fontFamily: "Inter_700Bold", letterSpacing: -1.2 },
   welcome: { marginTop: 4, fontSize: 14, fontFamily: "Inter_500Medium" },

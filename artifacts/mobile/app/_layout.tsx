@@ -18,6 +18,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AudioPlayerProvider } from "@/contexts/AudioPlayerContext";
 import { LocalMusicProvider } from "@/contexts/LocalMusicContext";
 import { SessionProvider } from "@/contexts/SessionContext";
+import { ThemeProvider } from "@/contexts/ThemeContext";
 
 setBaseUrl(process.env.EXPO_PUBLIC_DOMAIN ? `https://${process.env.EXPO_PUBLIC_DOMAIN}` : null);
 SplashScreen.preventAutoHideAsync();
@@ -67,21 +68,23 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      <ErrorBoundary>
-        <QueryClientProvider client={queryClient}>
-          <GestureHandlerRootView style={{ flex: 1 }}>
-            <KeyboardProvider>
-              <SessionProvider>
-                <LocalMusicProvider>
-                  <AudioPlayerProvider>
-                    <RootLayoutNav />
-                  </AudioPlayerProvider>
-                </LocalMusicProvider>
-              </SessionProvider>
-            </KeyboardProvider>
-          </GestureHandlerRootView>
-        </QueryClientProvider>
-      </ErrorBoundary>
+      <ThemeProvider>
+        <ErrorBoundary>
+          <QueryClientProvider client={queryClient}>
+            <GestureHandlerRootView style={{ flex: 1 }}>
+              <KeyboardProvider>
+                <SessionProvider>
+                  <LocalMusicProvider>
+                    <AudioPlayerProvider>
+                      <RootLayoutNav />
+                    </AudioPlayerProvider>
+                  </LocalMusicProvider>
+                </SessionProvider>
+              </KeyboardProvider>
+            </GestureHandlerRootView>
+          </QueryClientProvider>
+        </ErrorBoundary>
+      </ThemeProvider>
     </SafeAreaProvider>
   );
 }
