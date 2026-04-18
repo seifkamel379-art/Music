@@ -40,6 +40,21 @@ This is a pnpm workspace monorepo. The active product is **Seif music**, a priva
 - Main scroll uses a single `FlatList` with `ListHeaderComponent` — lag-free scrolling.
 - `vercel.json` in root for PWA/web deployment of the Expo web export. Run `pnpm --filter @workspace/mobile run build:web` to generate `dist/`.
 
+## Web App (React + Vite)
+
+- **Path**: `artifacts/web/`
+- **URL**: Preview at `/` (port 22333)
+- **Stack**: React 19, Vite 7, TailwindCSS v4, TanStack Query
+- **Splash animation**: Logo + animated rings + wave bars on black background
+- **Features**: Login, Search, Library, Favorites, Audio Player with queue
+- **State**: All user data (playlist, favorites, history) stored in `localStorage`
+- **API proxy**: Vite dev server proxies `/api/*` → localhost:8080
+- **Vercel deploy**: `vercel.json` at root configures build from pnpm workspace
+  - Build: `pnpm --filter @workspace/web run build`
+  - Output: `artifacts/web/dist/public`
+  - API rewrites: `/api/*` → Replit backend URL (update URL in `vercel.json` after deploying backend)
+- **Build**: `BASE_PATH=/ PORT=22333 pnpm --filter @workspace/web run build`
+
 ## Key Commands
 
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API client and Zod schemas from OpenAPI spec
