@@ -1,14 +1,24 @@
 import { Ionicons, Feather } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { router } from "expo-router";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect } from "react";
 import { Dimensions, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import Animated, {
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useAudioPlayer } from "@/contexts/AudioPlayerContext";
 import { useColors } from "@/hooks/useColors";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
+const BAR_PADDING = 24;
+const BAR_WIDTH = SCREEN_WIDTH - BAR_PADDING * 2;
+const THUMB_SIZE = 20;
 
 function formatTime(seconds: number) {
   if (!isFinite(seconds) || isNaN(seconds)) return "0:00";
@@ -30,20 +40,72 @@ export default function PlayerModal() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { currentTrack, status, pauseOrResume, playNext, playPrev, seekTo, queue } = useAudioPlayer();
-  const [seeking, setSeeking] = useState(false);
-  const [seekValue, setSeekValue] = useState(0);
 
   const duration = status.duration && isFinite(status.duration) ? status.duration : 0;
   const fallbackDuration = parseDurationLabel(currentTrack?.duration);
   const displayDuration = duration > 0 ? duration : fallbackDuration;
   const currentTime = status.currentTime && isFinite(status.currentTime) ? status.currentTime : 0;
-  const progress = displayDuration > 0 ? Math.min(1, currentTime / displayDuration) : 0;
+  const liveProgress = displayDuration > 0 ? Math.min(1, currentTime / displayDuration) : 0;
 
   const currentIndex = queue.findIndex((t) => t.videoId === currentTrack?.videoId);
   const hasNext = currentIndex < queue.length - 1;
   const hasPrev = currentIndex > 0;
-
   const artSize = Math.min(SCREEN_WIDTH - 64, 340);
+
+  const visualProgress = useSharedValue(0);
+  const isDragging = useSharedValue(false);
+  const seekDisplayTime = useSharedValue(0);
+
+  useEffect(() => {
+    if (!isDragging.value) {
+      visualProgress.value = liveProgress;
+    }
+  }, [liveProgress]);
+
+  const callSeekTo = useCallback((seconds: number) => {
+    seekTo(seconds);
+  }, [seekTo]);
+
+  const panGesture = Gesture.Pan()
+    .minDistance(0)
+    .onBegin((e) => {
+      isDragging.value = true;
+      const ratio = Math.max(0, Math.min(1, e.x / BAR_WIDTH));
+      visualProgress.value = ratio;
+      seekDisplayTime.value = ratio * displayDuration;
+    })
+    .onUpdate((e) => {
+      const ratio = Math.max(0, Math.min(1, e.x / BAR_WIDTH));
+      visualProgress.value = ratio;
+      seekDisplayTime.value = ratio * displayDuration;
+    })
+    .onEnd(() => {
+      const t = visualProgress.value * displayDuration;
+      isDragging.value = false;
+      runOnJS(callSeekTo)(t);
+    });
+
+  const tapGesture = Gesture.Tap()
+    .onEnd((e) => {
+      if (!displayDuration || displayDuration <= 0) return;
+      const ratio = Math.max(0, Math.min(1, e.x / BAR_WIDTH));
+      const t = ratio * displayDuration;
+      visualProgress.value = ratio;
+      runOnJS(callSeekTo)(t);
+    });
+
+  const composed = Gesture.Exclusive(panGesture, tapGesture);
+
+  const thumbStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: visualProgress.value * BAR_WIDTH - THUMB_SIZE / 2 },
+      { scale: withSpring(isDragging.value ? 1.4 : 1, { damping: 15, stiffness: 220 }) },
+    ],
+  }));
+
+  const fillStyle = useAnimatedStyle(() => ({
+    width: `${Math.min(100, Math.max(0, visualProgress.value * 100))}%`,
+  }));
 
   if (!currentTrack) {
     return (
@@ -99,32 +161,26 @@ export default function PlayerModal() {
       </View>
 
       <View style={styles.progressSection}>
-        <Pressable
-          style={styles.progressBarOuter}
-          onPress={(e) => {
-            if (!displayDuration || !isFinite(displayDuration) || displayDuration <= 0) return;
-            const { locationX } = e.nativeEvent;
-            const barWidth = Math.max(1, SCREEN_WIDTH - 48);
-            const ratio = Math.max(0, Math.min(1, locationX / barWidth));
-            const target = ratio * displayDuration;
-            if (isFinite(target) && target >= 0) seekTo(target);
-          }}
-        >
-          <View style={[styles.progressBarBg, { backgroundColor: "rgba(255,244,223,0.15)" }]}>
-            <View
-              style={[styles.progressBarFill, { width: `${progress * 100}%`, backgroundColor: colors.gold }]}
+        <GestureDetector gesture={composed}>
+          <View style={styles.seekHitArea} collapsable={false}>
+            <View style={[styles.progressBarBg, { backgroundColor: "rgba(255,244,223,0.15)" }]}>
+              <Animated.View style={[styles.progressBarFill, { backgroundColor: colors.gold }, fillStyle]} />
+            </View>
+            <Animated.View
+              style={[
+                styles.progressThumb,
+                { backgroundColor: colors.gold, shadowColor: colors.gold },
+                thumbStyle,
+              ]}
             />
           </View>
-          <View
-            style={[
-              styles.progressThumb,
-              { left: `${progress * 100}%`, backgroundColor: colors.gold },
-            ]}
-          />
-        </Pressable>
+        </GestureDetector>
+
         <View style={styles.timeRow}>
           <Text style={styles.timeText}>{formatTime(currentTime)}</Text>
-          <Text style={styles.timeText}>{duration > 0 ? formatTime(duration) : currentTrack.duration || formatTime(displayDuration)}</Text>
+          <Text style={styles.timeText}>
+            {duration > 0 ? formatTime(duration) : currentTrack.duration || formatTime(displayDuration)}
+          </Text>
         </View>
       </View>
 
@@ -187,12 +243,21 @@ const styles = StyleSheet.create({
   trackInfo: { flex: 1 },
   trackTitle: { color: "#FFFFFF", fontSize: 26, fontFamily: "Inter_700Bold", letterSpacing: -0.5 },
   trackArtist: { color: "rgba(255,255,255,0.65)", fontSize: 16, fontFamily: "Inter_500Medium", marginTop: 6 },
-  progressSection: { width: "100%", paddingHorizontal: 24, marginBottom: 36 },
-  progressBarOuter: { position: "relative", height: 28, justifyContent: "center" },
-  progressBarBg: { height: 4, borderRadius: 2, overflow: "hidden", width: "100%" },
-  progressBarFill: { height: 4, borderRadius: 2 },
-  progressThumb: { position: "absolute", width: 16, height: 16, borderRadius: 8, top: 6, marginLeft: -8 },
-  timeRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 8 },
+  progressSection: { width: "100%", paddingHorizontal: BAR_PADDING, marginBottom: 36 },
+  seekHitArea: { height: 44, justifyContent: "center", position: "relative" },
+  progressBarBg: { height: 5, borderRadius: 3, overflow: "hidden", width: "100%" },
+  progressBarFill: { height: 5, borderRadius: 3 },
+  progressThumb: {
+    position: "absolute",
+    width: THUMB_SIZE,
+    height: THUMB_SIZE,
+    borderRadius: THUMB_SIZE / 2,
+    top: (44 - THUMB_SIZE) / 2,
+    shadowOpacity: 0.6,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  timeRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 10 },
   timeText: { color: "rgba(255,255,255,0.55)", fontSize: 13, fontFamily: "Inter_500Medium" },
   controls: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 32, marginBottom: 28 },
   sideBtn: { width: 54, height: 54, alignItems: "center", justifyContent: "center" },
