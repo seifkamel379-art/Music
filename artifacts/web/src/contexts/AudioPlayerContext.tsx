@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useMemo } from "react";
+import { resolveStreamUrl } from "@/lib/piped";
 
 export type Track = {
   videoId: string;
@@ -122,12 +123,23 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     };
   }, []);
 
-  function loadAndPlay(track: Track) {
+  async function loadAndPlay(track: Track) {
     const audio = audioRef.current; if (!audio) return;
     setCurrentTrack(track);
     setStatus({ playing: false, currentTime: 0, duration: 0, isBuffering: true });
     updateMediaSession(track, false);
-    audio.src = track.streamUrl;
+
+    let url = track.streamUrl;
+    if (url.startsWith("yt:")) {
+      try {
+        url = await resolveStreamUrl(url.replace("yt:", ""));
+      } catch {
+        setStatus(s => ({ ...s, isBuffering: false }));
+        return;
+      }
+    }
+
+    audio.src = url;
     audio.load();
     audio.play().catch(() => {});
   }

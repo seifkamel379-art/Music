@@ -23,9 +23,10 @@ This is a pnpm workspace monorepo. The active product is **Seif music**, a priva
 - Private login uses a shared password: `16168080`
 - UI must not mention YouTube; music source details stay hidden from users.
 - Palette lives in `artifacts/mobile/constants/colors.ts` — Spotify-style light/dark tokens with green primary, black/dark surfaces, and light-mode neutral cards.
-- Music search uses `yt-search`. Audio streaming uses yt-dlp piped through ffmpeg → MP3 (audio/mpeg, 192k, 44100Hz stereo). Format is MP3 for universal mobile/browser compatibility.
-- YouTube cookies stored as object array in `artifacts/api-server/src/secrets.ts` (compatible with `ytdl.createAgent`).
-- **All user data (playlist, favorites) stored client-side in AsyncStorage** — no DB dependency for user data.
+- **Web app streaming**: Fully client-side via public Piped API + Invidious fallback (`artifacts/web/src/lib/piped.ts`). No local server or yt-dlp/ffmpeg needed. Search and audio stream URLs fetched directly from Piped/Invidious public instances.
+- **Mobile app streaming**: Still uses API server with yt-dlp + ffmpeg for MP3 conversion (192k, 44100Hz stereo).
+- Stream URLs in Track objects use the prefix `yt:VIDEO_ID` as a lazy placeholder; `AudioPlayerContext` resolves the real URL from Piped just before playback.
+- **All user data (playlist, favorites) stored client-side in localStorage/AsyncStorage** — no DB dependency for user data.
 - `LocalMusicContext` in `artifacts/mobile/contexts/LocalMusicContext.tsx` manages all local state.
 - `AudioPlayerContext` in `artifacts/mobile/contexts/AudioPlayerContext.tsx` manages shared audio player instance with queue/next/prev.
 - Tab bar is hidden (`display: none`) — navigation handled via in-screen NavPill buttons.

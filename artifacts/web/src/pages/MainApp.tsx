@@ -1,5 +1,5 @@
-import { useState, useCallback, useMemo, useRef } from "react";
-import { useSearchTracks } from "@workspace/api-client-react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { searchTracks as pipedSearch, resolveStreamUrl } from "@/lib/piped";
 import { storage, type Track } from "@/lib/storage";
 import { useAudioPlayer } from "@/contexts/AudioPlayerContext";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -22,10 +22,12 @@ function safeTitle(name: string) {
   return name.replace(/\.[^/.]+$/, "").slice(0, 60) || "أغنية";
 }
 
-function downloadTrack(track: Track) {
-  const sep = track.streamUrl.includes("?") ? "&" : "?";
-  const url = `${track.streamUrl}${sep}download=1&title=${encodeURIComponent(track.title)}`;
-  Object.assign(document.createElement("a"), { href: url, download: `${track.title}.mp3`, rel: "noopener" })
+async function downloadTrack(track: Track) {
+  let url = track.streamUrl;
+  if (url.startsWith("yt:")) {
+    try { url = await resolveStreamUrl(url.replace("yt:", "")); } catch { return; }
+  }
+  Object.assign(document.createElement("a"), { href: url, target: "_blank", rel: "noopener" })
     .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
 }
 
@@ -46,14 +48,24 @@ export default function MainApp({ userName, onLogout }: Props) {
   const [deviceTracks, setDeviceTracks] = useState<DeviceTrack[]>([]);
   const [deviceLoading, setDeviceLoading] = useState(false);
   const [deviceError, setDeviceError] = useState<string | null>(null);
+  const [searchResults, setSearchResults] = useState<Track[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { currentTrack, playTrack } = useAudioPlayer();
 
-  const search = useSearchTracks({ q: query }, {
-    query: { enabled: query.trim().length > 1, staleTime: 60000, retry: 1 },
-  });
+  useEffect(() => {
+    if (query.trim().length <= 1) { setSearchResults([]); return; }
+    setSearchLoading(true);
+    const timer = setTimeout(() => {
+      pipedSearch(query.trim())
+        .then(tracks => setSearchResults(tracks as Track[]))
+        .catch(() => setSearchResults([]))
+        .finally(() => setSearchLoading(false));
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [query]);
 
-  const searchTracks: Track[] = useMemo(() => (search.data?.tracks ?? []).map(toTrack), [search.data]);
+  const searchTracks: Track[] = searchResults;
   const featured = useMemo(() => (playlist.length > 0 ? playlist.slice(0, 6) : searchTracks.slice(0, 6)), [playlist, searchTracks]);
 
   const addHistory = useCallback((q: string) => {
@@ -314,14 +326,14 @@ export default function MainApp({ userName, onLogout }: Props) {
       )}
 
       {/* ===== LOADING ===== */}
-      {search.isFetching && (section === "search" || section === "home") && (
+      {searchLoading && (section === "search" || section === "home") && (
         <div style={{ display: "flex", justifyContent: "center", alignItems: "flex-end", gap: 5, padding: "20px 0" }}>
           {[0,1,2,3,4].map(i => <div key={i} className="wave-bar" style={{ width: 5, height: 24, background: C.primary, borderRadius: 999, animationDelay: `${i*0.1}s` }} />)}
         </div>
       )}
 
       {/* ===== EMPTY ===== */}
-      {section !== "device" && listData.length === 0 && !search.isFetching && (
+      {section !== "device" && listData.length === 0 && !searchLoading && (
         <div style={{ margin: 18, borderRadius: 22, border: `1px solid ${C.border}`, padding: 24, background: C.card, display: "flex", flexDirection: "column", alignItems: "center", direction: "rtl" }}>
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={C.primary} strokeWidth="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
           <div style={{ marginTop: 10, fontSize: 17, fontWeight: 700, color: C.foreground }}>
