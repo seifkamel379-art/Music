@@ -20,7 +20,7 @@ This is a pnpm workspace monorepo. The active product is **Seif music**, a priva
 ## Product Notes
 
 - App name: Seif music
-- Private login uses a shared password: `80808016`
+- Private login uses a shared password: `16168080`
 - UI must not mention YouTube; music source details stay hidden from users.
 - Palette lives in `artifacts/mobile/constants/colors.ts` — Spotify-style light/dark tokens with green primary, black/dark surfaces, and light-mode neutral cards.
 - Music search uses `yt-search`. Audio streaming uses yt-dlp piped through ffmpeg → MP3 (audio/mpeg, 192k, 44100Hz stereo). Format is MP3 for universal mobile/browser compatibility.

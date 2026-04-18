@@ -2,7 +2,7 @@ import { useState } from "react";
 import { storage } from "@/lib/storage";
 import { useTheme } from "@/contexts/ThemeContext";
 
-const PASS = "80808016";
+const PASS = "16168080";
 
 interface Props { onLogin: (name: string) => void; }
 
@@ -10,6 +10,7 @@ export default function LoginPage({ onLogin }: Props) {
   const { colors: C, themeMode, toggleTheme } = useTheme();
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
+  const [showPass, setShowPass] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [nameFocus, setNameFocus] = useState(false);
   const [pwFocus, setPwFocus] = useState(false);
@@ -56,13 +57,27 @@ export default function LoginPage({ onLogin }: Props) {
             onFocus={() => setNameFocus(true)} onBlur={() => setNameFocus(false)}
             style={{ height: 56, border: `1.5px solid ${nameFocus ? C.primary : C.border}`, borderRadius: 18, paddingInline: 16, fontSize: 16, fontWeight: 600, color: C.foreground, background: C.input, outline: "none", width: "100%", direction: "rtl", fontFamily: "inherit", marginBottom: 12, transition: "border-color 0.15s" }}
           />
-          <input
-            type="password" placeholder="الباسورد" value={password}
-            onChange={e => { setPassword(e.target.value); setError(null); }}
-            onKeyDown={e => e.key === "Enter" && submit()}
-            onFocus={() => setPwFocus(true)} onBlur={() => setPwFocus(false)}
-            style={{ height: 56, border: `1.5px solid ${error ? C.destructive : pwFocus ? C.primary : C.border}`, borderRadius: 18, paddingInline: 16, fontSize: 16, fontWeight: 600, color: C.foreground, background: C.input, outline: "none", width: "100%", direction: "rtl", fontFamily: "inherit", marginBottom: 12, transition: "border-color 0.15s" }}
-          />
+
+          {/* Password field with show/hide */}
+          <div style={{ position: "relative", marginBottom: 12 }}>
+            <input
+              type={showPass ? "text" : "password"} placeholder="الباسورد" value={password}
+              onChange={e => { setPassword(e.target.value); setError(null); }}
+              onKeyDown={e => e.key === "Enter" && submit()}
+              onFocus={() => setPwFocus(true)} onBlur={() => setPwFocus(false)}
+              style={{ height: 56, border: `1.5px solid ${error ? C.destructive : pwFocus ? C.primary : C.border}`, borderRadius: 18, paddingInlineStart: 48, paddingInlineEnd: 16, fontSize: 16, fontWeight: 600, color: C.foreground, background: C.input, outline: "none", width: "100%", direction: "rtl", fontFamily: "inherit", transition: "border-color 0.15s", boxSizing: "border-box" }}
+            />
+            <button
+              type="button"
+              onClick={() => setShowPass(v => !v)}
+              style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", padding: 4, display: "flex", alignItems: "center", color: C.mutedForeground }}
+            >
+              {showPass
+                ? <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                : <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              }
+            </button>
+          </div>
 
           {error && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, border: `1px solid ${C.destructive}88`, borderRadius: 12, padding: "10px 12px", marginBottom: 10, background: `${C.destructive}22`, color: C.destructive, fontSize: 14, fontWeight: 600 }}>

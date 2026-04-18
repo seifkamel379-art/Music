@@ -4,7 +4,7 @@ import yts from "yt-search";
 import { z } from "zod/v4";
 
 const router: IRouter = Router();
-const PASSWORD = "80808016";
+const PASSWORD = "16168080";
 
 const YTDLP = "python3.11";
 const YTDLP_ARGS = ["-m", "yt_dlp"];
