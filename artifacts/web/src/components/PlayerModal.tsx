@@ -107,7 +107,7 @@ export default function PlayerModal({ onClose, C }: Props) {
 
       {/* Progress */}
       <div style={{ width: "100%", paddingInline: 24, marginBottom: 36 }}>
-        <div ref={barRef} style={{ height: 44, display: "flex", alignItems: "center", cursor: "pointer", position: "relative" }}
+        <div ref={barRef} style={{ height: 44, display: "flex", alignItems: "center", cursor: "pointer", position: "relative", direction: "ltr" }}
           onMouseDown={e => { dragging.current = true; setDragProgress(getRatio(e.clientX)); }}
           onTouchStart={e => { dragging.current = true; setDragProgress(getRatio(e.touches[0].clientX)); }}
           onClick={e => { seekTo(getRatio(e.clientX) * duration); }}

@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { searchTracks as pipedSearch, resolveStreamUrl } from "@/lib/piped";
+import { searchTracks as pipedSearch } from "@/lib/piped";
 import { storage, type Track } from "@/lib/storage";
 import { useAudioPlayer } from "@/contexts/AudioPlayerContext";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -23,10 +23,7 @@ function safeTitle(name: string) {
 }
 
 async function downloadTrack(track: Track) {
-  let url = track.streamUrl;
-  if (url.startsWith("yt:")) {
-    try { url = await resolveStreamUrl(url.replace("yt:", "")); } catch { return; }
-  }
+  const url = track.streamUrl;
   Object.assign(document.createElement("a"), { href: url, target: "_blank", rel: "noopener" })
     .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
 }
