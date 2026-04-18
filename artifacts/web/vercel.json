@@ -1,6 +1,6 @@
 {
   "buildCommand": "cd ../.. && pnpm --filter @workspace/web run build",
-  "outputDirectory": "artifacts/web/dist/public",
+  "outputDirectory": "dist/public",
   "installCommand": "cd ../.. && pnpm install",
   "framework": null,
   "rewrites": [
