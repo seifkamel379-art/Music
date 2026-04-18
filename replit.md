@@ -2,15 +2,16 @@
 
 ## Overview
 
-This is a pnpm workspace monorepo. The active product is **Seif music**, a private Expo mobile music streaming app backed by an Express API.
+This is a pnpm workspace monorepo. The active product is **Seif music**, a private Expo mobile music streaming app backed by an Express API, with a React/Vite web preview for Replit.
 
 ## Stack
 
 - **Monorepo tool**: pnpm workspaces
-- **Node.js version**: 24
+- **Node.js version**: 20 in this Replit environment
 - **Package manager**: pnpm
 - **TypeScript version**: 5.9
 - **Mobile app**: Expo / React Native
+- **Web app**: React 19 / Vite 7
 - **API framework**: Express 5
 - **Validation**: Zod (`zod/v4`)
 - **API codegen**: Orval from `lib/api-spec/openapi.yaml`
@@ -40,10 +41,17 @@ This is a pnpm workspace monorepo. The active product is **Seif music**, a priva
 - Main scroll uses a single `FlatList` with `ListHeaderComponent` — lag-free scrolling.
 - `vercel.json` in root for PWA/web deployment of the Expo web export. Run `pnpm --filter @workspace/mobile run build:web` to generate `dist/`.
 
+## Replit Migration
+
+- The Replit development workflow is `Start application`.
+- It runs `scripts/start-replit-dev.sh`, which starts the API on port `8080` and the web app on port `3000`.
+- The web app proxies `/api/*` to the local API server in development, keeping backend logic and private checks off the client.
+- The API requires the `PORT` environment variable and fails explicitly if it is missing or invalid.
+
 ## Web App (React + Vite)
 
 - **Path**: `artifacts/web/`
-- **URL**: Preview at `/` (port 22333)
+- **URL**: Preview at `/` (development workflow port `3000`; artifact metadata also supports port `22333`)
 - **Stack**: React 19, Vite 7, TailwindCSS v4, TanStack Query
 - **Splash animation**: Logo + animated rings + wave bars on black background
 - **Features**: Login, Search, Library, Favorites, Audio Player with queue
@@ -59,5 +67,6 @@ This is a pnpm workspace monorepo. The active product is **Seif music**, a priva
 
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API client and Zod schemas from OpenAPI spec
 - `pnpm --filter @workspace/api-server run dev` — run API server locally
+- `pnpm --filter @workspace/web run dev` — run React web app locally
 - `pnpm --filter @workspace/mobile run dev` — run Expo mobile app
 - `pnpm --filter @workspace/mobile run build:web` — build web/PWA export to `artifacts/mobile/dist/`
