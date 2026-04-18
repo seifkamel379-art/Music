@@ -14,7 +14,9 @@ export async function searchTracks(query: string): Promise<PipedTrack[]> {
     signal: AbortSignal.timeout(12000),
   });
   if (!res.ok) throw new Error(`البحث فشل: ${res.status}`);
-  const data: Array<{ videoId: string; title: string; thumbnail?: string; author?: string; duration?: string }> = await res.json();
+  const json = await res.json();
+  const data: Array<{ videoId: string; title: string; thumbnail?: string; author?: string; duration?: string }> =
+    Array.isArray(json) ? json : (json.results ?? json.tracks ?? []);
   return data.map((item) => ({
     videoId: item.videoId,
     title: item.title ?? "بدون عنوان",
