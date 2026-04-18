@@ -22,14 +22,26 @@ function safeTitle(name: string) {
   return name.replace(/\.[^/.]+$/, "").slice(0, 60) || "أغنية";
 }
 
-function downloadTrack(track: Track) {
-  const url = `/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`;
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${track.title}.mp3`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+async function downloadTrack(track: Track, setDownloading: React.Dispatch<React.SetStateAction<Set<string>>>) {
+  setDownloading(prev => new Set([...prev, track.videoId]));
+  try {
+    const res = await fetch(track.streamUrl);
+    if (!res.ok) throw new Error("fetch failed");
+    const blob = await res.blob();
+    const ext = blob.type.includes("webm") ? "webm" : blob.type.includes("ogg") ? "ogg" : "mp3";
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = `${track.title}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
+  } catch {
+    window.open(track.streamUrl, "_blank", "noopener,noreferrer");
+  } finally {
+    setDownloading(prev => { const next = new Set(prev); next.delete(track.videoId); return next; });
+  }
 }
 
 function toTrack(t: { videoId: string; title: string; artist: string; duration: string; thumbnail?: string | null; streamUrl: string }): Track {
@@ -49,6 +61,7 @@ export default function MainApp({ userName, onLogout }: Props) {
   const [deviceTracks, setDeviceTracks] = useState<DeviceTrack[]>([]);
   const [deviceLoading, setDeviceLoading] = useState(false);
   const [deviceError, setDeviceError] = useState<string | null>(null);
+  const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
   const [searchResults, setSearchResults] = useState<Track[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -262,7 +275,7 @@ export default function MainApp({ userName, onLogout }: Props) {
             {section === "playlist" ? `مكتبتك (${playlist.length})` : section === "favorites" ? `المفضلة (${favorites.length})` : "نتائج البحث"}
           </div>
           {section === "playlist" && playlist.length > 0 && (
-            <button onClick={() => playlist.forEach(t => downloadTrack(t))} style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: 999, padding: "9px 13px", background: C.primary, border: "none", cursor: "pointer", color: C.primaryForeground, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
+            <button onClick={() => playlist.forEach(t => downloadTrack(t, setDownloadingIds))} style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: 999, padding: "9px 13px", background: C.primary, border: "none", cursor: "pointer", color: C.primaryForeground, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
               تحميل الكل
             </button>
@@ -353,10 +366,11 @@ export default function MainApp({ userName, onLogout }: Props) {
           isCurrent={currentTrack?.videoId === track.videoId}
           isPlaying={currentTrack?.videoId === track.videoId}
           isFavorite={isFav(track.videoId)}
+          isDownloading={downloadingIds.has(track.videoId)}
           onPlay={() => playTrack(track, listData)}
           onFavorite={() => toggleFavorite(track)}
           onPlaylist={() => addToPlaylist(track)}
-          onDownload={() => downloadTrack(track)}
+          onDownload={() => downloadTrack(track, setDownloadingIds)}
           onRemove={section === "playlist" ? () => removeFromPlaylist(track.videoId) : undefined}
           C={C}
         />

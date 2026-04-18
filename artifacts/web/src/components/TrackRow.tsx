@@ -6,13 +6,13 @@ const COVERS = ["/cover-one.png", "/cover-two.png", "/cover-three.png"];
 
 interface Props {
   track: Track; index: number;
-  isCurrent: boolean; isPlaying: boolean; isFavorite: boolean;
+  isCurrent: boolean; isPlaying: boolean; isFavorite: boolean; isDownloading?: boolean;
   onPlay: () => void; onFavorite: () => void; onPlaylist: () => void;
   onDownload: () => void; onRemove?: () => void;
   C: Colors;
 }
 
-export default function TrackRow({ track, index, isCurrent, isPlaying, isFavorite, onPlay, onFavorite, onPlaylist, onDownload, onRemove, C }: Props) {
+export default function TrackRow({ track, index, isCurrent, isPlaying, isFavorite, isDownloading, onPlay, onFavorite, onPlaylist, onDownload, onRemove, C }: Props) {
   const [imgErr, setImgErr] = useState(false);
 
   return (
@@ -53,8 +53,15 @@ export default function TrackRow({ track, index, isCurrent, isPlaying, isFavorit
         <Btn onClick={onPlaylist} title="أضف للمكتبة">
           <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke={C.primary} strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
         </Btn>
-        <Btn onClick={onDownload} title="تحميل">
-          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke={C.primary} strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <Btn onClick={isDownloading ? undefined : onDownload} title={isDownloading ? "جارٍ التحميل…" : "تحميل"}>
+          {isDownloading ? (
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke={C.primary} strokeWidth="2"
+              style={{ animation: "spin 1s linear infinite" }}>
+              <circle cx="12" cy="12" r="10" strokeDasharray="40 20" />
+            </svg>
+          ) : (
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke={C.primary} strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          )}
         </Btn>
         {onRemove && (
           <Btn onClick={onRemove} title="حذف">
@@ -66,9 +73,9 @@ export default function TrackRow({ track, index, isCurrent, isPlaying, isFavorit
   );
 }
 
-function Btn({ onClick, title, children }: { onClick: () => void; title?: string; children: React.ReactNode }) {
+function Btn({ onClick, title, children }: { onClick?: () => void; title?: string; children: React.ReactNode }) {
   return (
-    <button onClick={onClick} title={title} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, display: "flex" }}>
+    <button onClick={onClick} title={title} disabled={!onClick} style={{ background: "none", border: "none", cursor: onClick ? "pointer" : "default", padding: 4, display: "flex", opacity: onClick ? 1 : 0.5 }}>
       {children}
     </button>
   );
