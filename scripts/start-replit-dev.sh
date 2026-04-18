@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-PORT=8080 pnpm --filter @workspace/api-server run dev &
+PORT=3001 pnpm --filter @workspace/api-server run dev &
 api_pid=$!
 
-PORT=${WEB_PORT:-3000} BASE_PATH=/ pnpm --filter @workspace/web run dev &
+PORT=8080 BASE_PATH=/ pnpm --filter @workspace/web run dev &
 web_pid=$!
 
 cleanup() {
