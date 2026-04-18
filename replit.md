@@ -57,9 +57,11 @@ This is a pnpm workspace monorepo. The active product is **Seif music**, a priva
 - **Features**: Login, Search, Library, Favorites, Audio Player with queue
 - **State**: All user data (playlist, favorites, history) stored in `localStorage`
 - **API proxy**: Vite dev server proxies `/api/*` → localhost:8080
-- **Vercel deploy**: `vercel.json` at root configures build from pnpm workspace
-  - Build: `pnpm --filter @workspace/web run build`
-  - Output: `artifacts/web/dist/public`
+- **Vercel deploy**: `vercel.json` at root and `artifacts/web/vercel.json` both configure a Vercel-safe build
+  - Build from repo root: `bash scripts/build-vercel-web.sh`
+  - Build from `artifacts/web` root: `cd ../.. && bash scripts/build-vercel-web.sh`
+  - Output Directory: `public`
+  - The script builds the web app, then copies `artifacts/web/dist/public` into both root `public/` and `artifacts/web/public/` so Vercel succeeds whether the project root is the repository root or `artifacts/web`.
   - API rewrites: `/api/*` → Replit backend URL (update URL in `vercel.json` after deploying backend)
 - **Build**: `BASE_PATH=/ PORT=22333 pnpm --filter @workspace/web run build`
 
