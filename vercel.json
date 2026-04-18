@@ -4,7 +4,7 @@
   "installCommand": "pnpm install",
   "framework": null,
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "https://YOUR_API_SERVER_URL/api/$1" }
+    { "source": "/api/(.*)", "destination": "https://cb6bd792-5cb1-4472-8103-c43ba83eaa62-00-260evfu88h39o.worf.replit.dev/api/$1" }
   ],
   "headers": [
     {
