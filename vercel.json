@@ -1,6 +1,6 @@
 {
-  "buildCommand": "pnpm install && pnpm --filter @workspace/mobile run build:web",
-  "outputDirectory": "artifacts/mobile/dist",
+  "buildCommand": "pnpm install && pnpm --filter @workspace/mobile run build:web && cp -r artifacts/mobile/dist dist",
+  "outputDirectory": "dist",
   "installCommand": "pnpm install",
   "framework": null,
   "rewrites": [

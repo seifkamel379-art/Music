@@ -8,6 +8,7 @@ const PASSWORD = "80808016";
 
 const YTDLP = "python3.11";
 const YTDLP_ARGS = ["-m", "yt_dlp"];
+const FFMPEG = "ffmpeg";
 
 function streamUrl(videoId: string) {
   return `/api/music/stream/${encodeURIComponent(videoId)}`;
@@ -108,7 +109,7 @@ router.get("/music/stream/:videoId", async (req, res, next) => {
     const ytProc = spawn(YTDLP, [
       ...YTDLP_ARGS,
       "--format",
-      "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio",
+      "bestaudio",
       "--no-playlist",
       "--quiet",
       "--no-part",
@@ -117,32 +118,20 @@ router.get("/music/stream/:videoId", async (req, res, next) => {
       watchUrl,
     ]);
 
-    res.setHeader("Content-Type", "audio/mp4");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("Transfer-Encoding", "chunked");
+    const ffProc = spawn(FFMPEG, [
+      "-i", "pipe:0",
+      "-vn",
+      "-ar", "44100",
+      "-ac", "2",
+      "-b:a", "192k",
+      "-f", "mp3",
+      "pipe:1",
+    ]);
 
-    if (isDownload) {
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${asciiFallback}.m4a"; filename*=UTF-8''${encodeURIComponent(`${safeTitle}.m4a`)}`
-      );
-    }
-
-    let headersSent = false;
-    ytProc.stdout.on("data", (chunk: Buffer) => {
-      if (!res.writableEnded) {
-        if (!headersSent) headersSent = true;
-        res.write(chunk);
-      }
-    });
-
-    ytProc.stdout.on("end", () => {
-      if (!res.writableEnded) res.end();
-    });
+    ytProc.stdout.pipe(ffProc.stdin);
 
     ytProc.on("error", (err) => {
+      try { ffProc.kill("SIGTERM"); } catch {}
       if (!res.headersSent) {
         res.status(503).json({ message: "Stream process error" });
       } else if (!res.writableEnded) {
@@ -151,8 +140,47 @@ router.get("/music/stream/:videoId", async (req, res, next) => {
     });
 
     ytProc.on("close", (code) => {
+      if (code !== 0) {
+        try { ffProc.kill("SIGTERM"); } catch {}
+      }
+    });
+
+    ytProc.stderr.on("data", () => {});
+
+    ffProc.on("error", (err) => {
+      if (!res.headersSent) {
+        res.status(503).json({ message: "Conversion process error" });
+      } else if (!res.writableEnded) {
+        res.end();
+      }
+    });
+
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Transfer-Encoding", "chunked");
+
+    if (isDownload) {
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${asciiFallback}.mp3"; filename*=UTF-8''${encodeURIComponent(`${safeTitle}.mp3`)}`
+      );
+    }
+
+    ffProc.stdout.on("data", (chunk: Buffer) => {
+      if (!res.writableEnded) {
+        res.write(chunk);
+      }
+    });
+
+    ffProc.stdout.on("end", () => {
+      if (!res.writableEnded) res.end();
+    });
+
+    ffProc.on("close", (code) => {
       if (code !== 0 && !res.headersSent) {
-        res.status(503).json({ message: "Audio extraction failed" });
+        res.status(503).json({ message: "Audio conversion failed" });
       } else if (!res.writableEnded) {
         res.end();
       }
@@ -160,6 +188,7 @@ router.get("/music/stream/:videoId", async (req, res, next) => {
 
     req.on("close", () => {
       try { ytProc.kill("SIGTERM"); } catch {}
+      try { ffProc.kill("SIGTERM"); } catch {}
     });
   } catch (error) {
     if (!res.headersSent) {

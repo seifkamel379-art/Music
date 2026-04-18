@@ -102,9 +102,6 @@ function getChromeIntentUrl(url: string) {
   return `intent://${withoutScheme}#Intent;scheme=${scheme};package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(url)};end`;
 }
 
-function wait(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 function toPlayerTrack(track: { videoId: string; title: string; artist: string; duration: string; thumbnail?: string | null; streamUrl: string }): PlayerTrack {
   return {
@@ -214,7 +211,7 @@ export default function MusicScreen() {
   async function downloadTrack(track: PlayerTrack, silent = false) {
     const url = getDownloadUrl(track);
     if (!url) return;
-    const filename = `${safeFileName(track.title)}.m4a`;
+    const filename = `${safeFileName(track.title)}.mp3`;
     try {
       if (triggerWebDownload(url, filename)) {
         if (!silent) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -254,11 +251,9 @@ export default function MusicScreen() {
   async function downloadPlaylist() {
     if (playlist.length === 0) return;
     const tracks = playlist.map(toPlayerTrack);
-    Alert.alert("تحميل المكتبة", `هيبدأ تحميل كل أغاني مكتبتك: ${tracks.length} أغنية. وافق على أي طلب من Chrome أو المتصفح.`);
-    for (const track of tracks) {
-      await downloadTrack(track, true);
-      await wait(900);
-    }
+    Alert.alert("تحميل المكتبة", `هيبدأ تحميل ${tracks.length} أغنية في نفس الوقت. انتظر شوية.`);
+    await Promise.all(tracks.map((track) => downloadTrack(track, true)));
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   }
 
   const activeHasTrack = !!currentTrack;
