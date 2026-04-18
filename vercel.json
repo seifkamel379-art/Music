@@ -1,6 +1,6 @@
 {
   "buildCommand": "echo 'using pre-built files'",
-  "outputDirectory": "web-dist",
+  "outputDirectory": "public",
   "installCommand": "echo 'skip'",
   "framework": null,
   "rewrites": [
