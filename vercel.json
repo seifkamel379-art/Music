@@ -1,7 +1,7 @@
 {
-  "buildCommand": "pnpm --filter @workspace/mobile run build:web && cp -r artifacts/mobile/dist dist",
-  "outputDirectory": "dist",
-  "installCommand": "pnpm install",
+  "buildCommand": "echo 'using pre-built files'",
+  "outputDirectory": "web-dist",
+  "installCommand": "echo 'skip'",
   "framework": null,
   "rewrites": [
     { "source": "/api/(.*)", "destination": "https://cb6bd792-5cb1-4472-8103-c43ba83eaa62-00-260evfu88h39o.worf.replit.dev/api/$1" }
