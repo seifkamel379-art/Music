@@ -9,7 +9,7 @@
       "destination": "https://cb6bd792-5cb1-4472-8103-c43ba83eaa62-00-260evfu88h39o.worf.replit.dev/api/:path*"
     },
     {
-      "source": "/(.*)",
+      "source": "/((?!api|assets|_next|favicon|logo|cover|manifest|sw\\.js).*)",
       "destination": "/index.html"
     }
   ],
@@ -19,13 +19,28 @@
       "headers": [
         { "key": "X-Content-Type-Options", "value": "nosniff" },
         { "key": "X-Frame-Options", "value": "SAMEORIGIN" },
-        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "Permissions-Policy", "value": "autoplay=*, microphone=()" }
       ]
     },
     {
       "source": "/assets/(.*)",
       "headers": [
         { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+      ]
+    },
+    {
+      "source": "/sw.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
+        { "key": "Content-Type", "value": "application/javascript; charset=utf-8" }
+      ]
+    },
+    {
+      "source": "/manifest.json",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=86400" },
+        { "key": "Content-Type", "value": "application/manifest+json" }
       ]
     }
   ]

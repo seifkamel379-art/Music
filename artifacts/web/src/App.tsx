@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
+import { ThemeProvider } from "@/contexts/ThemeContext";
 import { AudioPlayerProvider } from "@/contexts/AudioPlayerContext";
 import { storage } from "@/lib/storage";
 import SplashScreen from "@/pages/SplashScreen";
@@ -20,23 +21,22 @@ export default function App() {
   }, []);
 
   const handleLogin = useCallback((name: string) => {
-    setUserName(name);
-    setAppState("app");
+    setUserName(name); setAppState("app");
   }, []);
 
   const handleLogout = useCallback(() => {
-    storage.clearSession();
-    setUserName("");
-    setAppState("login");
+    storage.clearSession(); setUserName(""); setAppState("login");
   }, []);
 
   return (
     <QueryClientProvider client={queryClient}>
-      <AudioPlayerProvider>
-        {appState === "splash" && <SplashScreen onDone={handleSplashDone} />}
-        {appState === "login" && <LoginPage onLogin={handleLogin} />}
-        {appState === "app" && <MainApp userName={userName} onLogout={handleLogout} />}
-      </AudioPlayerProvider>
+      <ThemeProvider>
+        <AudioPlayerProvider>
+          {appState === "splash" && <SplashScreen onDone={handleSplashDone} />}
+          {appState === "login" && <LoginPage onLogin={handleLogin} />}
+          {appState === "app" && <MainApp userName={userName} onLogout={handleLogout} />}
+        </AudioPlayerProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }
