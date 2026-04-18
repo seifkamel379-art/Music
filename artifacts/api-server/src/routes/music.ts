@@ -64,37 +64,44 @@ router.get("/music/download", async (req, res, next) => {
       .replace(/\s+/g, "_")
       .slice(0, 120) || `track-${id}`;
 
-    const upstream = await fetch(`${EXTERNAL_API}/api/proxy?id=${encodeURIComponent(id)}`);
+    const asciiFilename = `track-${id}.mp3`;
+    const utf8Filename = encodeURIComponent(`${safeTitle}.mp3`);
 
-    if (!upstream.ok || !upstream.body) {
-      res.status(502).json({ message: "Could not fetch audio" });
-      return;
-    }
-
-    const contentType = upstream.headers.get("content-type") ?? "audio/mpeg";
-    const ext = contentType.includes("webm") ? "webm" : contentType.includes("ogg") ? "ogg" : "mp3";
-
-    // filename= must be ASCII only; filename*= carries the full UTF-8 name
-    const asciiFilename = `track-${id}.${ext}`;
-    const utf8Filename = encodeURIComponent(`${safeTitle}.${ext}`);
-
-    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Content-Disposition", `attachment; filename="${asciiFilename}"; filename*=UTF-8''${utf8Filename}`);
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Access-Control-Allow-Origin", "*");
 
-    const reader = upstream.body.getReader();
-    const pump = async () => {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) { res.end(); break; }
-        if (!res.writableEnded) res.write(value);
-        else { reader.cancel(); break; }
-      }
-    };
+    const { spawn } = await import("child_process");
 
-    req.on("close", () => reader.cancel().catch(() => {}));
-    await pump();
+    const ytUrl = `https://www.youtube.com/watch?v=${id}`;
+    const ytdlp = spawn("yt-dlp", [
+      "--no-playlist",
+      "-x",
+      "--audio-format", "mp3",
+      "--audio-quality", "0",
+      "-o", "-",
+      ytUrl,
+    ]);
+
+    ytdlp.stdout.pipe(res);
+
+    ytdlp.stderr.on("data", (chunk: Buffer) => {
+      console.error("[yt-dlp]", chunk.toString());
+    });
+
+    req.on("close", () => ytdlp.kill());
+
+    ytdlp.on("error", (err: Error) => {
+      console.error("[yt-dlp] spawn error", err);
+      if (!res.headersSent) next(err);
+      else if (!res.writableEnded) res.end();
+    });
+
+    ytdlp.on("close", (code: number) => {
+      if (code !== 0) console.error(`[yt-dlp] exited with code ${code}`);
+      if (!res.writableEnded) res.end();
+    });
   } catch (error) {
     if (!res.headersSent) next(error);
     else if (!res.writableEnded) res.end();
