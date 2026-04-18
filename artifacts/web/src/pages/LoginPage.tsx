@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { useMusicLogin } from "@workspace/api-client-react";
 import { storage } from "@/lib/storage";
 import { useTheme } from "@/contexts/ThemeContext";
+
+const PASS = "80808016";
 
 interface Props { onLogin: (name: string) => void; }
 
@@ -13,18 +14,13 @@ export default function LoginPage({ onLogin }: Props) {
   const [nameFocus, setNameFocus] = useState(false);
   const [pwFocus, setPwFocus] = useState(false);
 
-  const login = useMusicLogin({
-    mutation: {
-      onSuccess: (data) => { storage.setSession(data.name); onLogin(data.name); },
-      onError: () => setError("الباسورد غلط، جرّب تاني"),
-    },
-  });
-
   const submit = (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!name.trim()) { setError("اكتب اسمك الأول"); return; }
-    setError(null);
-    login.mutate({ data: { name: name.trim(), password } });
+    if (password !== PASS) { setError("الباسورد غلط، جرّب تاني"); return; }
+    const n = name.trim();
+    storage.setSession(n);
+    onLogin(n);
   };
 
   return (
@@ -75,8 +71,8 @@ export default function LoginPage({ onLogin }: Props) {
             </div>
           )}
 
-          <button type="submit" disabled={login.isPending} style={{ height: 56, borderRadius: 20, border: "none", cursor: "pointer", background: C.primary, color: C.primaryForeground, fontSize: 17, fontWeight: 700, fontFamily: "inherit", marginTop: 6, opacity: login.isPending ? 0.8 : 1 }}>
-            {login.isPending ? "جارٍ الدخول..." : "دخول"}
+          <button type="submit" style={{ height: 56, borderRadius: 20, border: "none", cursor: "pointer", background: C.primary, color: C.primaryForeground, fontSize: 17, fontWeight: 700, fontFamily: "inherit", marginTop: 6 }}>
+            دخول
           </button>
         </form>
       </div>
