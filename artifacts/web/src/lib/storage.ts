@@ -1,4 +1,4 @@
-export type StoredTrack = {
+export type Track = {
   videoId: string;
   title: string;
   artist: string;
@@ -9,30 +9,25 @@ export type StoredTrack = {
 
 function get<T>(key: string, fallback: T): T {
   try {
-    const val = localStorage.getItem(key);
-    return val ? (JSON.parse(val) as T) : fallback;
-  } catch {
-    return fallback;
-  }
+    const v = localStorage.getItem(key);
+    return v ? (JSON.parse(v) as T) : fallback;
+  } catch { return fallback; }
 }
-
-function set<T>(key: string, val: T): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(val));
-  } catch {}
+function set<T>(key: string, v: T) {
+  try { localStorage.setItem(key, JSON.stringify(v)); } catch {}
 }
 
 export const storage = {
-  getSession: (): string | null => localStorage.getItem("session_name"),
-  setSession: (name: string) => localStorage.setItem("session_name", name),
-  clearSession: () => localStorage.removeItem("session_name"),
+  getSession: (): string | null => localStorage.getItem("sk_session"),
+  setSession: (n: string) => localStorage.setItem("sk_session", n),
+  clearSession: () => localStorage.removeItem("sk_session"),
 
-  getPlaylist: (): StoredTrack[] => get("playlist", []),
-  setPlaylist: (tracks: StoredTrack[]) => set("playlist", tracks),
+  getPlaylist: (): Track[] => get("sk_playlist", []),
+  setPlaylist: (t: Track[]) => set("sk_playlist", t),
 
-  getFavorites: (): StoredTrack[] => get("favorites", []),
-  setFavorites: (tracks: StoredTrack[]) => set("favorites", tracks),
+  getFavorites: (): Track[] => get("sk_favorites", []),
+  setFavorites: (t: Track[]) => set("sk_favorites", t),
 
-  getHistory: (): string[] => get("search_history", []),
-  setHistory: (items: string[]) => set("search_history", items),
+  getHistory: (): string[] => get("sk_history", []),
+  setHistory: (t: string[]) => set("sk_history", t),
 };

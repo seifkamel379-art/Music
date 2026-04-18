@@ -1,108 +1,78 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import { useSearchTracks } from "@workspace/api-client-react";
-import { storage, type StoredTrack } from "@/lib/storage";
+import { storage, type Track } from "@/lib/storage";
+import { useAudioPlayer } from "@/contexts/AudioPlayerContext";
 import TrackRow from "@/components/TrackRow";
-import AudioPlayer from "@/components/AudioPlayer";
+import MiniPlayer from "@/components/MiniPlayer";
+import PlayerModal from "@/components/PlayerModal";
 
 type Section = "home" | "search" | "playlist" | "favorites";
 
+const C = {
+  background: "#000000", card: "#121212", primary: "#1DB954", primaryFg: "#000000",
+  foreground: "#FFFFFF", secondary: "#1F1F1F", muted: "#181818",
+  mutedFg: "#B3B3B3", border: "#2A2A2A", destructive: "#F15E6C",
+  gold: "#1DB954", espresso: "#000000", sand: "#181818", input: "#242424",
+};
+
 const QUICK_SEARCHES = ["اغاني مصرية", "عمرو دياب", "ويجز", "تامر حسني", "أم كلثوم", "راب مصري"];
+const COVERS = ["/cover-one.png", "/cover-two.png", "/cover-three.png"];
 
-function apiTrackToStored(t: {
-  videoId: string;
-  title: string;
-  artist: string;
-  duration: string;
-  thumbnail?: string | null;
-  streamUrl: string;
-}): StoredTrack {
-  return {
-    videoId: t.videoId,
-    title: t.title,
-    artist: t.artist,
-    duration: t.duration,
-    thumbnail: t.thumbnail ?? null,
-    streamUrl: t.streamUrl,
-  };
+const NAV_ITEMS: { section: Section; label: string; icon: React.ReactNode }[] = [
+  { section: "home", label: "الرئيسية", icon: <HomeIcon /> },
+  { section: "search", label: "بحث", icon: <SearchIcon /> },
+  { section: "playlist", label: "مكتبتك", icon: <ListIcon /> },
+  { section: "favorites", label: "المفضلة", icon: <HeartIcon /> },
+];
+
+function apiToTrack(t: { videoId: string; title: string; artist: string; duration: string; thumbnail?: string | null; streamUrl: string }): Track {
+  return { videoId: t.videoId, title: t.title, artist: t.artist, duration: t.duration, thumbnail: t.thumbnail ?? null, streamUrl: t.streamUrl };
 }
 
-function downloadTrack(track: StoredTrack) {
-  const url = `${track.streamUrl}${track.streamUrl.includes("?") ? "&" : "?"}download=1&title=${encodeURIComponent(track.title)}`;
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${track.title}.mp3`;
-  a.rel = "noopener";
-  a.style.display = "none";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+function downloadTrack(track: Track) {
+  const sep = track.streamUrl.includes("?") ? "&" : "?";
+  const url = `${track.streamUrl}${sep}download=1&title=${encodeURIComponent(track.title)}`;
+  const a = Object.assign(document.createElement("a"), { href: url, download: `${track.title}.mp3`, rel: "noopener" });
+  document.body.appendChild(a); a.click(); a.remove();
 }
 
-interface Props {
-  userName: string;
-  onLogout: () => void;
-}
+interface Props { userName: string; onLogout: () => void; }
 
 export default function MainApp({ userName, onLogout }: Props) {
   const [section, setSection] = useState<Section>("home");
   const [query, setQuery] = useState("اغاني مصرية");
-  const [playlist, setPlaylist] = useState<StoredTrack[]>(() => storage.getPlaylist());
-  const [favorites, setFavorites] = useState<StoredTrack[]>(() => storage.getFavorites());
+  const [playlist, setPlaylist] = useState<Track[]>(() => storage.getPlaylist());
+  const [favorites, setFavorites] = useState<Track[]>(() => storage.getFavorites());
   const [history, setHistory] = useState<string[]>(() => storage.getHistory());
-  const [currentTrack, setCurrentTrack] = useState<StoredTrack | null>(null);
-  const [queue, setQueue] = useState<StoredTrack[]>([]);
+  const [showPlayer, setShowPlayer] = useState(false);
+  const { currentTrack, playTrack } = useAudioPlayer();
 
-  const search = useSearchTracks(
-    { q: query },
-    {
-      query: {
-        enabled: query.trim().length > 1,
-        staleTime: 60000,
-        retry: 1,
-      },
-    },
-  );
+  const search = useSearchTracks({ q: query }, {
+    query: { enabled: query.trim().length > 1, staleTime: 60000, retry: 1 },
+  });
 
-  const searchTracks: StoredTrack[] = useMemo(
-    () => (search.data?.tracks ?? []).map(apiTrackToStored),
-    [search.data],
-  );
-
-  const persistPlaylist = useCallback((tracks: StoredTrack[]) => {
-    setPlaylist(tracks);
-    storage.setPlaylist(tracks);
-  }, []);
-
-  const persistFavorites = useCallback((tracks: StoredTrack[]) => {
-    setFavorites(tracks);
-    storage.setFavorites(tracks);
-  }, []);
+  const searchTracks: Track[] = useMemo(() => (search.data?.tracks ?? []).map(apiToTrack), [search.data]);
 
   const addHistory = useCallback((q: string) => {
-    setHistory((prev) => {
-      const next = [q, ...prev.filter((x) => x !== q)].slice(0, 8);
+    setHistory(prev => {
+      const next = [q, ...prev.filter(x => x !== q)].slice(0, 10);
       storage.setHistory(next);
       return next;
     });
   }, []);
 
-  const playTrack = useCallback((track: StoredTrack, tracks: StoredTrack[]) => {
-    setCurrentTrack(track);
-    setQueue(tracks);
-  }, []);
-
-  const toggleFavorite = useCallback((track: StoredTrack) => {
-    setFavorites((prev) => {
-      const exists = prev.some((t) => t.videoId === track.videoId);
-      const next = exists ? prev.filter((t) => t.videoId !== track.videoId) : [track, ...prev];
+  const toggleFavorite = useCallback((track: Track) => {
+    setFavorites(prev => {
+      const exists = prev.some(t => t.videoId === track.videoId);
+      const next = exists ? prev.filter(t => t.videoId !== track.videoId) : [track, ...prev];
       storage.setFavorites(next);
       return next;
     });
   }, []);
 
-  const addToPlaylist = useCallback((track: StoredTrack) => {
-    setPlaylist((prev) => {
-      if (prev.some((t) => t.videoId === track.videoId)) return prev;
+  const addToPlaylist = useCallback((track: Track) => {
+    setPlaylist(prev => {
+      if (prev.some(t => t.videoId === track.videoId)) return prev;
       const next = [...prev, track];
       storage.setPlaylist(next);
       return next;
@@ -110,345 +80,302 @@ export default function MainApp({ userName, onLogout }: Props) {
   }, []);
 
   const removeFromPlaylist = useCallback((videoId: string) => {
-    setPlaylist((prev) => {
-      const next = prev.filter((t) => t.videoId !== videoId);
-      storage.setPlaylist(next);
-      return next;
-    });
+    setPlaylist(prev => { const next = prev.filter(t => t.videoId !== videoId); storage.setPlaylist(next); return next; });
   }, []);
 
-  const isFavorite = useCallback((videoId: string) => favorites.some((t) => t.videoId === videoId), [favorites]);
-  const inPlaylist = useCallback((videoId: string) => playlist.some((t) => t.videoId === videoId), [playlist]);
+  const isFav = useCallback((id: string) => favorites.some(t => t.videoId === id), [favorites]);
 
-  const listData: StoredTrack[] = useMemo(() => {
+  const listData = useMemo(() => {
     if (section === "favorites") return favorites;
     if (section === "playlist") return playlist;
     return searchTracks;
   }, [section, favorites, playlist, searchTracks]);
 
-  const featured = useMemo(
-    () => (playlist.length > 0 ? playlist.slice(0, 6) : searchTracks.slice(0, 6)),
-    [playlist, searchTracks],
-  );
-
-  const NAV = [
-    { id: "home" as Section, label: "الرئيسية", icon: "🏠" },
-    { id: "search" as Section, label: "بحث", icon: "🔍" },
-    { id: "playlist" as Section, label: "مكتبتي", icon: "📋" },
-    { id: "favorites" as Section, label: "المفضلة", icon: "❤️" },
-  ];
+  const featured = useMemo(() => (playlist.length > 0 ? playlist.slice(0, 6) : searchTracks.slice(0, 6)), [playlist, searchTracks]);
 
   const hasPlayer = !!currentTrack;
 
   return (
-    <div
-      className="min-h-dvh bg-black flex flex-col"
-      style={{ fontFamily: "inherit", paddingBottom: hasPlayer ? 100 : 0 }}
-    >
-      <div
-        className="sticky top-0 z-30 px-4 py-3 flex items-center justify-between"
-        style={{ background: "#000000dd", backdropFilter: "blur(16px)", borderBottom: "1px solid #1a1a1a" }}
-      >
-        <div dir="rtl">
-          <p className="text-[#888] text-xs uppercase tracking-widest">PRIVATE STREAM</p>
-          <h1 className="text-white font-bold text-lg leading-tight">music&sk</h1>
-          <p className="text-[#1DB954] text-xs">أهلاً {userName} 👋</p>
-        </div>
+    <div style={{ minHeight: "100dvh", background: C.background, paddingBottom: hasPlayer ? 158 : 76 }}>
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={onLogout}
-            className="text-sm px-3 py-1.5 rounded-full transition-all hover:scale-105 active:scale-95"
-            style={{ background: "#111", border: "1px solid #333", color: "#888" }}
-          >
-            خروج
-          </button>
-        </div>
-      </div>
+      {/* Scrollable content */}
+      <div style={{ overflowY: "auto", height: "100dvh", paddingBottom: hasPlayer ? 158 : 76 }}>
 
-      <div className="px-4 py-4" dir="rtl">
-        <div
-          className="rounded-2xl p-4 mb-4 flex items-center justify-between"
-          style={{ background: "linear-gradient(135deg, #0a1a0a, #111)" }}
-        >
+        {/* Header */}
+        <div style={{
+          paddingInline: 18, paddingTop: 12, paddingBottom: 14,
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+          direction: "rtl",
+        }}>
           <div>
-            <p className="text-[#1DB954] text-xs font-bold uppercase tracking-wider mb-1">موسيقاك الخاصة</p>
-            <p className="text-white font-bold text-lg">{playlist.length} أغنية في مكتبتك</p>
-            <p className="text-[#666] text-xs mt-1">بحث سريع · تشغيل فوري · تحميل كامل</p>
+            <div style={{ color: C.mutedFg, fontSize: 11, fontWeight: 700, letterSpacing: 1.4, textTransform: "uppercase" }}>PRIVATE STREAM</div>
+            <div style={{ color: C.foreground, fontSize: 34, fontWeight: 700, letterSpacing: -1.2, lineHeight: 1.1 }}>music&sk</div>
+            <div style={{ color: C.mutedFg, fontSize: 14, fontWeight: 500, marginTop: 4 }}>أهلاً {userName}</div>
           </div>
-          <div className="flex items-end gap-[5px]">
-            {[0, 1, 2, 3].map((i) => (
-              <div
-                key={i}
-                className="wave-bar bg-[#1DB954] rounded-full"
-                style={{
-                  width: 5,
-                  height: 20 + (i % 3) * 8,
-                  animationDelay: `${i * 0.1}s`,
-                  animationDuration: `${0.7 + (i % 3) * 0.2}s`,
-                }}
-              />
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button
+              onClick={onLogout}
+              style={{
+                width: 46, height: 46, borderRadius: 23, background: C.card,
+                border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+              }}
+              title="خروج"
+            >
+              <LogoutIcon />
+            </button>
+          </div>
+        </div>
+
+        {/* Hero card */}
+        <div style={{
+          marginInline: 18, borderRadius: 22, padding: 18, minHeight: 140,
+          background: C.espresso, display: "flex", justifyContent: "space-between",
+          alignItems: "center", overflow: "hidden",
+          border: `1px solid ${C.border}`,
+          direction: "rtl",
+        }}>
+          <div style={{ flex: 1, zIndex: 1 }}>
+            <div style={{ color: C.gold, fontSize: 13, fontWeight: 700 }}>موسيقاك الخاصة</div>
+            <div style={{ color: "#fff", fontSize: 27, fontWeight: 700, marginTop: 6, letterSpacing: -0.6 }}>
+              {playlist.length} أغنية في مكتبتك
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.72)", fontSize: 13, lineHeight: "19px", marginTop: 8, fontWeight: 500 }}>
+              بحث سريع · تشغيل فوري · تحميل كامل
+            </div>
+          </div>
+          <div style={{ width: 128, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 7 }}>
+            <div style={{
+              width: 92, height: 92, borderRadius: 46, borderWidth: 2, borderStyle: "solid",
+              borderColor: C.gold, display: "flex", alignItems: "center", justifyContent: "center",
+              background: "rgba(255,255,255,0.06)",
+            }}>
+              <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke={C.gold} strokeWidth="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+            </div>
+            {[72, 48, 32].map((h, i) => (
+              <div key={i} className="wave-bar" style={{
+                width: 7, height: h, borderRadius: 999, background: C.gold, opacity: 0.85,
+                animationDelay: `${i * 0.12}s`,
+              }} />
             ))}
           </div>
         </div>
 
-        <div
-          className="flex items-center gap-2 rounded-xl px-4 py-3 mb-3"
-          style={{ background: "#111", border: "1px solid #222" }}
-        >
-          <span style={{ color: "#1DB954" }}>🔍</span>
+        {/* Search box */}
+        <div style={{
+          marginInline: 18, marginTop: 16, height: 54, borderRadius: 22,
+          border: `1px solid ${C.border}`, paddingInline: 16,
+          display: "flex", alignItems: "center", gap: 10,
+          background: C.card, direction: "rtl",
+        }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.primary} strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input
             type="text"
             value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              if (e.target.value.trim().length > 1) setSection("search");
+            onChange={e => { setQuery(e.target.value); if (e.target.value.trim().length > 1) setSection("search"); }}
+            onKeyDown={e => { if (e.key === "Enter" && query.trim().length > 1) { addHistory(query.trim()); setSection("search"); } }}
+            placeholder="ابحث عن أي أغنية"
+            style={{
+              flex: 1, height: 52, fontSize: 16, fontWeight: 600, background: "transparent",
+              border: "none", outline: "none", color: C.foreground, fontFamily: "inherit",
+              textAlign: "right", direction: "rtl",
             }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && query.trim().length > 1) {
-                addHistory(query.trim());
-                setSection("search");
-              }
-            }}
-            placeholder="ابحث عن أي أغنية..."
-            className="flex-1 bg-transparent outline-none text-white text-sm"
-            style={{ fontFamily: "inherit", direction: "rtl" }}
           />
           {query && (
-            <button onClick={() => setQuery("")} style={{ color: "#555" }}>✕</button>
+            <button onClick={() => setQuery("")} style={{ background: "none", border: "none", cursor: "pointer", color: C.mutedFg, display: "flex" }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           )}
         </div>
 
+        {/* Search history */}
         {history.length > 0 && section !== "playlist" && section !== "favorites" && (
-          <div className="mb-2">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs text-[#666]">بحث سابق</p>
-              <button
-                onClick={() => { setHistory([]); storage.setHistory([]); }}
-                className="text-xs text-[#e22134]"
-              >
-                مسح
-              </button>
+          <>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingInline: 20, paddingTop: 10, paddingBottom: 2, direction: "rtl" }}>
+              <span style={{ color: C.mutedFg, fontWeight: 700, fontSize: 12 }}>بحث سابق</span>
+              <button onClick={() => { setHistory([]); storage.setHistory([]); }} style={{ background: "none", border: "none", cursor: "pointer", color: C.destructive, fontWeight: 600, fontSize: 12, fontFamily: "inherit" }}>مسح</button>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {history.map((h) => (
-                <button
-                  key={h}
-                  onClick={() => { setQuery(h); setSection("search"); }}
-                  className="flex items-center gap-1 rounded-full px-3 py-1 text-xs transition-all hover:scale-105"
-                  style={{ background: "#111", border: "1px solid #222", color: "#aaa" }}
-                >
-                  <span>🕐</span> {h}
+            <div style={{ display: "flex", flexWrap: "nowrap", overflowX: "auto", gap: 8, paddingInline: 18, paddingBlock: 8, scrollbarWidth: "none" }}>
+              {history.map(h => (
+                <button key={h} onClick={() => { setQuery(h); setSection("search"); }}
+                  style={{
+                    borderRadius: 999, border: `1px solid ${C.border}`, padding: "9px 13px",
+                    display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap",
+                    background: C.card, cursor: "pointer", color: C.foreground, fontFamily: "inherit",
+                    fontSize: 13, fontWeight: 700,
+                  }}>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={C.mutedFg} strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  {h}
                 </button>
               ))}
             </div>
-          </div>
+          </>
         )}
 
-        <div className="flex flex-wrap gap-2 mb-4">
-          {QUICK_SEARCHES.map((q2) => (
-            <button
-              key={q2}
-              onClick={() => { setQuery(q2); setSection("search"); addHistory(q2); }}
-              className="rounded-full px-3 py-1.5 text-xs font-medium transition-all hover:scale-105 active:scale-95"
+        {/* Quick search chips */}
+        <div style={{ display: "flex", flexWrap: "nowrap", overflowX: "auto", gap: 8, paddingInline: 18, paddingBlock: 8, scrollbarWidth: "none" }}>
+          {QUICK_SEARCHES.map(q2 => (
+            <button key={q2} onClick={() => { setQuery(q2); setSection("search"); addHistory(q2); }}
               style={{
-                background: query === q2 ? "#1DB954" : "#111",
-                border: `1px solid ${query === q2 ? "#1DB954" : "#222"}`,
-                color: query === q2 ? "#000" : "#aaa",
-              }}
-            >
+                borderRadius: 999, border: `1px solid ${C.border}`, padding: "9px 13px",
+                whiteSpace: "nowrap", cursor: "pointer", fontFamily: "inherit",
+                fontSize: 13, fontWeight: 700,
+                background: query === q2 ? C.primary : C.card,
+                color: query === q2 ? C.primaryFg : C.foreground,
+              }}>
               {q2}
             </button>
           ))}
         </div>
 
+        {/* Featured + section headers */}
         {section === "home" && featured.length > 0 && (
-          <div className="mb-4">
-            <p className="text-white font-semibold text-sm mb-3">✨ مختارات</p>
-            <div className="flex gap-3 overflow-x-auto pb-2" style={{ scrollbarWidth: "none" }}>
+          <>
+            <div style={{ fontSize: 20, fontWeight: 700, marginInline: 18, marginTop: 20, marginBottom: 10, color: C.foreground, direction: "rtl" }}>مختارات</div>
+            <div style={{ display: "flex", overflowX: "auto", gap: 12, paddingInline: 18, paddingBottom: 8, scrollbarWidth: "none" }}>
               {featured.map((t, i) => (
-                <FeaturedCard
-                  key={t.videoId}
-                  track={t}
-                  index={i}
-                  onPlay={() => playTrack(t, featured)}
-                />
+                <FeaturedCard key={t.videoId} track={t} index={i} onPlay={() => playTrack(t, featured)} />
               ))}
             </div>
-            <p className="text-white font-semibold text-sm mt-4 mb-2">🎵 نتائج البحث</p>
-          </div>
+            <div style={{ fontSize: 20, fontWeight: 700, marginInline: 18, marginTop: 20, marginBottom: 10, color: C.foreground, direction: "rtl" }}>نتائج البحث</div>
+          </>
         )}
 
         {section !== "home" && (
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-white font-semibold text-sm">
-              {section === "playlist"
-                ? `📋 مكتبتي (${playlist.length})`
-                : section === "favorites"
-                ? `❤️ المفضلة (${favorites.length})`
-                : `🔍 نتائج البحث`}
-            </p>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingRight: 18, direction: "rtl" }}>
+            <div style={{ fontSize: 20, fontWeight: 700, marginInline: 18, marginTop: 20, marginBottom: 10, color: C.foreground }}>
+              {section === "playlist" ? `مكتبتك (${playlist.length})` : section === "favorites" ? `المفضلة (${favorites.length})` : "نتائج البحث"}
+            </div>
             {section === "playlist" && playlist.length > 0 && (
               <button
-                onClick={() => {
-                  playlist.forEach((t) => downloadTrack(t));
-                }}
-                className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-full font-bold transition-all hover:scale-105 active:scale-95"
-                style={{ background: "#1DB954", color: "#000" }}
-              >
-                ⬇ تحميل الكل
+                onClick={() => playlist.forEach(t => downloadTrack(t))}
+                style={{
+                  display: "flex", alignItems: "center", gap: 6, borderRadius: 999,
+                  padding: "9px 13px", marginTop: 12, background: C.primary,
+                  border: "none", cursor: "pointer", color: C.primaryFg,
+                  fontSize: 12, fontWeight: 700, fontFamily: "inherit",
+                }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                تحميل الكل
               </button>
             )}
           </div>
         )}
 
+        {/* Loading */}
         {search.isFetching && (section === "search" || section === "home") && (
-          <div className="flex justify-center py-8">
-            <div className="flex items-end gap-[5px]">
-              {[0, 1, 2, 3, 4].map((i) => (
-                <div
-                  key={i}
-                  className="wave-bar bg-[#1DB954] rounded-full"
-                  style={{
-                    width: 5,
-                    height: 24,
-                    animationDelay: `${i * 0.1}s`,
-                  }}
-                />
-              ))}
+          <div style={{ display: "flex", justifyContent: "center", alignItems: "flex-end", gap: 5, padding: "20px 0" }}>
+            {[0, 1, 2, 3, 4].map(i => (
+              <div key={i} className="wave-bar" style={{ width: 5, height: 24, background: C.primary, borderRadius: 999, animationDelay: `${i * 0.1}s` }} />
+            ))}
+          </div>
+        )}
+
+        {/* Empty state */}
+        {listData.length === 0 && !search.isFetching && (
+          <div style={{
+            margin: 18, borderRadius: 22, border: `1px solid ${C.border}`,
+            padding: 24, display: "flex", flexDirection: "column", alignItems: "center",
+            background: C.card, direction: "rtl",
+          }}>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={C.primary} strokeWidth="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+            <div style={{ marginTop: 10, fontSize: 17, fontWeight: 700, color: C.foreground }}>
+              {section === "favorites" ? "لسه مفيش مفضلة" : section === "playlist" ? "القائمة فاضية" : "ابدأ البحث"}
+            </div>
+            <div style={{ marginTop: 6, textAlign: "center", lineHeight: "20px", fontWeight: 500, color: C.mutedFg, fontSize: 14 }}>
+              {section === "playlist" || section === "favorites" ? "دور على الأغاني وضيفها للقائمة أو المفضلة" : "اكتب اسم الأغنية أو الفنان"}
             </div>
           </div>
         )}
 
-        {listData.length === 0 && !search.isFetching && (
-          <div
-            className="flex flex-col items-center py-12 rounded-2xl"
-            style={{ background: "#0a0a0a", border: "1px solid #1a1a1a" }}
-          >
-            <span className="text-4xl mb-3">
-              {section === "favorites" ? "💔" : section === "playlist" ? "📭" : "🎵"}
-            </span>
-            <p className="text-white font-semibold">
-              {section === "favorites"
-                ? "لسه مفيش مفضلة"
-                : section === "playlist"
-                ? "القائمة فاضية"
-                : "ابدأ البحث"}
-            </p>
-            <p className="text-[#555] text-sm mt-1">
-              {section === "favorites" || section === "playlist"
-                ? "دور على الأغاني وضيفها"
-                : "اكتب اسم الأغنية أو الفنان"}
-            </p>
-          </div>
-        )}
-
-        <div className="flex flex-col gap-1">
-          {listData.map((track, i) => (
-            <TrackRow
-              key={track.videoId}
-              track={track}
-              index={i}
-              isCurrent={currentTrack?.videoId === track.videoId}
-              isPlaying={currentTrack?.videoId === track.videoId}
-              isFavorite={isFavorite(track.videoId)}
-              inPlaylist={inPlaylist(track.videoId)}
-              onPlay={() => playTrack(track, listData)}
-              onFavorite={() => toggleFavorite(track)}
-              onPlaylist={() => addToPlaylist(track)}
-              onDownload={() => downloadTrack(track)}
-              onRemove={section === "playlist" ? () => removeFromPlaylist(track.videoId) : undefined}
-            />
-          ))}
-        </div>
-      </div>
-
-      <div
-        className="fixed bottom-0 left-0 right-0 z-30 flex justify-around items-center px-4 py-3"
-        style={{
-          background: "#0a0a0a",
-          borderTop: "1px solid #1a1a1a",
-          bottom: hasPlayer ? 90 : 0,
-        }}
-      >
-        {NAV.map((item) => (
-          <button
-            key={item.id}
-            onClick={() => setSection(item.id)}
-            className="flex flex-col items-center gap-1 transition-all hover:scale-110 active:scale-95 px-4 py-1"
-          >
-            <span style={{ fontSize: 20 }}>{item.icon}</span>
-            <span
-              className="text-xs font-medium"
-              style={{ color: section === item.id ? "#1DB954" : "#555" }}
-            >
-              {item.label}
-            </span>
-            {section === item.id && (
-              <div
-                className="rounded-full"
-                style={{ width: 4, height: 4, background: "#1DB954" }}
-              />
-            )}
-          </button>
+        {/* Track list */}
+        {listData.map((track, i) => (
+          <TrackRow
+            key={track.videoId} track={track} index={i}
+            isCurrent={currentTrack?.videoId === track.videoId}
+            isPlaying={currentTrack?.videoId === track.videoId}
+            isFavorite={isFav(track.videoId)}
+            onPlay={() => playTrack(track, listData)}
+            onFavorite={() => toggleFavorite(track)}
+            onPlaylist={() => addToPlaylist(track)}
+            onDownload={() => downloadTrack(track)}
+            onRemove={section === "playlist" ? () => removeFromPlaylist(track.videoId) : undefined}
+          />
         ))}
       </div>
 
-      {currentTrack && (
-        <AudioPlayer
-          track={currentTrack}
-          queue={queue}
-          onClose={() => setCurrentTrack(null)}
-          onTrackChange={(t) => setCurrentTrack(t)}
-        />
-      )}
+      {/* Mini player (floating above bottom nav) */}
+      {hasPlayer && <MiniPlayer onOpenPlayer={() => setShowPlayer(true)} />}
+
+      {/* Bottom nav */}
+      <div style={{
+        position: "fixed", left: 0, right: 0, bottom: 0, height: 76,
+        background: C.espresso, borderTop: `1px solid ${C.border}`,
+        display: "flex", alignItems: "center", justifyContent: "space-around",
+        paddingTop: 8, paddingBottom: 10, zIndex: 20,
+      }}>
+        {NAV_ITEMS.map(item => {
+          const active = section === item.section;
+          return (
+            <button key={item.section} onClick={() => setSection(item.section)} style={{
+              flex: 1, display: "flex", flexDirection: "column", alignItems: "center",
+              justifyContent: "center", gap: 4, background: "none", border: "none", cursor: "pointer",
+              color: active ? C.primary : C.mutedFg,
+            }}>
+              <div style={{ color: active ? C.primary : C.mutedFg }}>{item.icon}</div>
+              <div style={{ fontSize: 10.5, fontWeight: 700, fontFamily: "inherit", color: active ? C.primary : C.mutedFg }}>
+                {item.label}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Full player modal */}
+      {showPlayer && <PlayerModal onClose={() => setShowPlayer(false)} />}
     </div>
   );
 }
 
-function FeaturedCard({ track, index, onPlay }: { track: StoredTrack; index: number; onPlay: () => void }) {
+function FeaturedCard({ track, index, onPlay }: { track: Track; index: number; onPlay: () => void }) {
   const [imgErr, setImgErr] = useState(false);
   return (
     <button
       onClick={onPlay}
-      className="flex-shrink-0 text-right transition-all hover:scale-105 active:scale-95"
-      style={{ width: 130 }}
-      dir="rtl"
+      style={{
+        width: 140, borderRadius: 22, padding: 10, background: C.card,
+        border: "none", cursor: "pointer", flexShrink: 0, textAlign: "right", direction: "rtl",
+      }}
     >
-      <div
-        className="rounded-xl overflow-hidden mb-2 relative"
-        style={{ width: 130, height: 130 }}
-      >
+      <div style={{ width: "100%", height: 120, borderRadius: 16, marginBottom: 8, overflow: "hidden", position: "relative" }}>
         {track.thumbnail && !imgErr ? (
-          <img
-            src={track.thumbnail}
-            alt={track.title}
-            className="w-full h-full object-cover"
-            onError={() => setImgErr(true)}
-          />
+          <img src={track.thumbnail} onError={() => setImgErr(true)} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
         ) : (
-          <div
-            className="w-full h-full flex items-center justify-center text-4xl"
-            style={{ background: `hsl(${(index * 60) % 360}, 30%, 15%)` }}
-          >
-            🎵
-          </div>
+          <img src={COVERS[index % 3]} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
         )}
-        <div
-          className="absolute inset-0 flex items-end justify-start p-2"
-          style={{ background: "linear-gradient(to top, #000000aa, transparent)" }}
-        >
-          <div
-            className="rounded-full flex items-center justify-center"
-            style={{ background: "#1DB954", width: 28, height: 28, fontSize: 12 }}
-          >
-            ▶
-          </div>
-        </div>
       </div>
-      <p className="text-white text-xs font-semibold truncate">{track.title}</p>
-      <p className="text-[#888] text-xs truncate">{track.artist}</p>
+      <div style={{ fontSize: 13, lineHeight: "17px", fontWeight: 700, color: C.foreground, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+        {track.title}
+      </div>
+      <div style={{ fontSize: 11, fontWeight: 500, marginTop: 3, color: C.mutedFg, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {track.artist}
+      </div>
     </button>
   );
 }
 
+// SVG Icons
+function HomeIcon() {
+  return <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>;
+}
+function SearchIcon() {
+  return <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>;
+}
+function ListIcon() {
+  return <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>;
+}
+function HeartIcon() {
+  return <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>;
+}
+function LogoutIcon() {
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1DB954" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>;
+}

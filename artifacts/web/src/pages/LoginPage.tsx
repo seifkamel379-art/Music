@@ -2,9 +2,13 @@ import { useState } from "react";
 import { useMusicLogin } from "@workspace/api-client-react";
 import { storage } from "@/lib/storage";
 
-interface Props {
-  onLogin: (name: string) => void;
-}
+interface Props { onLogin: (name: string) => void; }
+
+const C = {
+  background: "#000000", card: "#121212", primary: "#1DB954", primaryFg: "#000000",
+  foreground: "#FFFFFF", mutedFg: "#B3B3B3", border: "#2A2A2A",
+  destructive: "#F15E6C", sand: "#181818", input: "#242424",
+};
 
 export default function LoginPage({ onLogin }: Props) {
   const [name, setName] = useState("");
@@ -13,13 +17,8 @@ export default function LoginPage({ onLogin }: Props) {
 
   const login = useMusicLogin({
     mutation: {
-      onSuccess: (data) => {
-        storage.setSession(data.name);
-        onLogin(data.name);
-      },
-      onError: () => {
-        setError("الباسورد غلط، جرّب تاني");
-      },
+      onSuccess: (data) => { storage.setSession(data.name); onLogin(data.name); },
+      onError: () => setError("الباسورد غلط، جرّب تاني"),
     },
   });
 
@@ -32,87 +31,101 @@ export default function LoginPage({ onLogin }: Props) {
 
   return (
     <div
-      className="min-h-dvh bg-black flex items-center justify-center px-4"
-      style={{ direction: "rtl" }}
+      style={{
+        minHeight: "100dvh", background: C.background,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 22, overflow: "hidden", position: "relative",
+        direction: "rtl",
+      }}
     >
+      {/* Green glow */}
+      <div style={{
+        position: "absolute", width: 340, height: 340, borderRadius: "50%",
+        background: "rgba(29,185,84,0.24)", top: 70, right: -120, pointerEvents: "none",
+      }} />
+
+      {/* Card */}
       <div
-        className="fade-in w-full max-w-sm"
+        className="fade-up"
         style={{
-          background: "radial-gradient(ellipse at top, #1a2a1a 0%, #000 70%)",
-          borderRadius: 20,
-          border: "1px solid #1DB95430",
-          padding: "40px 32px",
+          background: C.sand, borderRadius: 34, padding: 24, width: "100%", maxWidth: 400,
+          boxShadow: "0 8px 40px rgba(0,0,0,0.5)", position: "relative",
         }}
       >
-        <div className="flex flex-col items-center mb-8">
-          <div
-            className="mb-5 relative"
-            style={{
-              filter: "drop-shadow(0 0 24px #1DB95480)",
-            }}
-          >
-            <img
-              src="/logo.png"
-              alt="logo"
-              style={{ width: 80, height: 80, borderRadius: "50%" }}
-            />
+        {/* Logo circle */}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginBottom: 4 }}>
+          <div style={{
+            width: 76, height: 76, borderRadius: 38, background: C.primary,
+            display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 18,
+            boxShadow: "0 0 30px #1DB95460",
+          }}>
+            <img src="/logo.png" alt="logo" style={{ width: 60, height: 60, borderRadius: "50%" }} />
           </div>
-          <h1 className="text-white font-bold text-2xl tracking-wide">music&sk</h1>
-          <p className="text-[#888] text-sm mt-1">مساحتك الخاصة للمزيكا</p>
+          <h1 style={{ color: C.foreground, fontSize: 38, fontWeight: 700, letterSpacing: -1.3 }}>music&sk</h1>
+          <p style={{ color: C.mutedFg, fontSize: 15, fontWeight: 500, marginTop: 8, marginBottom: 22, lineHeight: "22px" }}>
+            مساحتك الخاصة للمزيكا
+          </p>
         </div>
 
-        <form onSubmit={submit} className="flex flex-col gap-3">
+        <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 0 }}>
           <input
             type="text"
             placeholder="اسمك"
             value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="w-full rounded-xl px-4 py-3 text-white text-sm outline-none transition-all"
+            onChange={e => setName(e.target.value)}
             style={{
-              background: "#111",
-              border: "1px solid #333",
-              fontFamily: "inherit",
+              height: 56, border: `1.5px solid ${C.border}`, borderRadius: 18,
+              paddingInline: 16, fontSize: 16, fontWeight: 600, color: C.foreground,
+              background: C.input, outline: "none", width: "100%", direction: "rtl",
+              fontFamily: "inherit", marginBottom: 12,
             }}
-            onFocus={(e) => (e.target.style.borderColor = "#1DB954")}
-            onBlur={(e) => (e.target.style.borderColor = "#333")}
+            onFocus={e => (e.target.style.borderColor = C.primary)}
+            onBlur={e => (e.target.style.borderColor = C.border)}
           />
 
           <input
             type="password"
             placeholder="الباسورد"
             value={password}
-            onChange={(e) => { setPassword(e.target.value); setError(null); }}
-            className="w-full rounded-xl px-4 py-3 text-white text-sm outline-none transition-all"
+            onChange={e => { setPassword(e.target.value); setError(null); }}
+            onKeyDown={e => e.key === "Enter" && submit(e as any)}
             style={{
-              background: "#111",
-              border: `1px solid ${error ? "#e22134" : "#333"}`,
-              fontFamily: "inherit",
+              height: 56, border: `1.5px solid ${error ? C.destructive : C.border}`, borderRadius: 18,
+              paddingInline: 16, fontSize: 16, fontWeight: 600, color: C.foreground,
+              background: C.input, outline: "none", width: "100%", direction: "rtl",
+              fontFamily: "inherit", marginBottom: 12,
             }}
-            onFocus={(e) => (e.target.style.borderColor = error ? "#e22134" : "#1DB954")}
-            onBlur={(e) => (e.target.style.borderColor = error ? "#e22134" : "#333")}
+            onFocus={e => (e.target.style.borderColor = error ? C.destructive : C.primary)}
+            onBlur={e => (e.target.style.borderColor = error ? C.destructive : C.border)}
           />
 
           {error && (
-            <div
-              className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm"
-              style={{ background: "#e2213422", border: "1px solid #e2213455", color: "#f15e6c" }}
-            >
-              <span>⚠</span>
-              <span>{error}</span>
+            <div style={{
+              display: "flex", alignItems: "center", gap: 8,
+              border: `1px solid ${C.destructive}88`, borderRadius: 12,
+              padding: "10px 12px", marginBottom: 10,
+              background: `${C.destructive}22`, color: C.destructive,
+              fontSize: 14, fontWeight: 600,
+            }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              {error}
             </div>
           )}
 
           <button
             type="submit"
             disabled={login.isPending}
-            className="w-full rounded-xl py-3 font-bold text-black text-base mt-1 transition-all active:scale-95"
-            style={{ background: "#1DB954", fontFamily: "inherit" }}
+            style={{
+              height: 56, borderRadius: 20, border: "none", cursor: "pointer",
+              background: C.primary, color: C.primaryFg,
+              fontSize: 17, fontWeight: 700, fontFamily: "inherit",
+              marginTop: 6, opacity: login.isPending ? 0.8 : 1,
+              transition: "transform 0.1s", transform: "scale(1)",
+            }}
+            onMouseDown={e => (e.currentTarget.style.transform = "scale(0.97)")}
+            onMouseUp={e => (e.currentTarget.style.transform = "scale(1)")}
           >
-            {login.isPending ? (
-              <span className="inline-block animate-spin">◌</span>
-            ) : (
-              "دخول"
-            )}
+            {login.isPending ? "جارٍ الدخول..." : "دخول"}
           </button>
         </form>
       </div>
