@@ -18,6 +18,14 @@ function cleanText(value: string | undefined | null, fallback: string) {
   return text && text.length > 0 ? text : fallback;
 }
 
+function safeDownloadName(rawTitle: string, videoId: string) {
+  return rawTitle
+    .replace(/[^\w\u0600-\u06FF\s\-().]/g, "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 120) || `track-${videoId}`;
+}
+
 async function searchMusic(q: string) {
   const res = await yts(q);
   return res.videos.slice(0, 18).map((item) => ({
@@ -94,18 +102,16 @@ router.get("/music/stream/:videoId", async (req, res, next) => {
 
     const isDownload = req.query.download === "1";
     const rawTitle = typeof req.query.title === "string" ? req.query.title : `track-${videoId}`;
-    const safeTitle =
-      rawTitle
-        .replace(/[^\w\u0600-\u06FF\s\-]/g, "")
-        .trim()
-        .replace(/\s+/g, "_") || `track-${videoId}`;
+    const safeTitle = safeDownloadName(rawTitle, videoId);
+    const asciiFallback = safeTitle.replace(/[^\x20-\x7E]/g, "").trim().replace(/\s+/g, "_") || `track-${videoId}`;
 
     const ytProc = spawn(YTDLP, [
       ...YTDLP_ARGS,
       "--format",
-      "bestaudio[ext=m4a]/bestaudio",
+      "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio",
       "--no-playlist",
       "--quiet",
+      "--no-part",
       "-o",
       "-",
       watchUrl,
@@ -114,12 +120,13 @@ router.get("/music/stream/:videoId", async (req, res, next) => {
     res.setHeader("Content-Type", "audio/mp4");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Transfer-Encoding", "chunked");
 
     if (isDownload) {
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="${safeTitle}.m4a"`
+        `attachment; filename="${asciiFallback}.m4a"; filename*=UTF-8''${encodeURIComponent(`${safeTitle}.m4a`)}`
       );
     }
 

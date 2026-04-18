@@ -2,7 +2,7 @@ import { type PropsWithChildren } from "react";
 
 export default function Root({ children }: PropsWithChildren) {
   return (
-    <html lang="ar" translate="no">
+    <html lang="ar" translate="no" className="notranslate">
       <head>
         <meta charSet="utf-8" />
         <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
@@ -14,17 +14,22 @@ export default function Root({ children }: PropsWithChildren) {
         <style
           dangerouslySetInnerHTML={{
             __html: `
+              html, body, #root {
+                translate: no;
+                -webkit-touch-callout: none;
+              }
               * {
                 user-select: none !important;
                 -webkit-user-select: none !important;
                 -moz-user-select: none !important;
                 -ms-user-select: none !important;
+                -webkit-tap-highlight-color: transparent;
               }
               input, textarea, [contenteditable] {
-                user-select: text !important;
-                -webkit-user-select: text !important;
-                -moz-user-select: text !important;
-                -ms-user-select: text !important;
+                user-select: none !important;
+                -webkit-user-select: none !important;
+                -moz-user-select: none !important;
+                -ms-user-select: none !important;
               }
               ::selection { background: transparent; }
               ::-moz-selection { background: transparent; }

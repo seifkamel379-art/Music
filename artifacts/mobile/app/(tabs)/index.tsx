@@ -2,6 +2,7 @@ import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSearchTracks, useMusicLogin } from "@workspace/api-client-react";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
+import * as FileSystem from "expo-file-system";
 import * as Linking from "expo-linking";
 import * as MediaLibrary from "expo-media-library";
 import { router } from "expo-router";
@@ -38,6 +39,13 @@ type DeviceTrack = {
 
 const domain = process.env.EXPO_PUBLIC_DOMAIN ? `https://${process.env.EXPO_PUBLIC_DOMAIN}` : "";
 const quickSearches = ["اغاني مصرية", "عمرو دياب", "ويجز", "تامر حسني", "أم كلثوم", "راب مصري"];
+const navItems: { section: Section; label: string; icon: keyof typeof Feather.glyphMap }[] = [
+  { section: "home", label: "الرئيسية", icon: "home" },
+  { section: "search", label: "بحث", icon: "search" },
+  { section: "playlist", label: "مكتبتك", icon: "list" },
+  { section: "favorites", label: "المفضلة", icon: "heart" },
+  { section: "device", label: "جهازي", icon: "smartphone" },
+];
 
 function getAbsoluteUrl(url?: string | null) {
   if (!url) return null;
@@ -56,6 +64,35 @@ function getCover(index: number) {
 function formatDurationMs(ms: number) {
   const s = Math.floor(ms / 1000);
   return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
+}
+
+function safeFileName(title: string) {
+  return (
+    title
+      .replace(/[^\w\u0600-\u06FF\s\-().]/g, "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .slice(0, 120) || "song"
+  );
+}
+
+function getDownloadUrl(track: Pick<PlayerTrack, "streamUrl" | "title">) {
+  const relativePath = track.streamUrl.startsWith(domain) ? track.streamUrl.slice(domain.length) : track.streamUrl;
+  const separator = relativePath.includes("?") ? "&" : "?";
+  return getAbsoluteUrl(`${relativePath}${separator}download=1&title=${encodeURIComponent(track.title)}`);
+}
+
+function triggerWebDownload(url: string, filename: string) {
+  if (Platform.OS !== "web" || typeof document === "undefined") return false;
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.rel = "noopener";
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  return true;
 }
 
 function toPlayerTrack(track: { videoId: string; title: string; artist: string; duration: string; thumbnail?: string | null; streamUrl: string }): PlayerTrack {
@@ -162,10 +199,31 @@ export default function MusicScreen() {
     playTrack(pt, allPt);
   }
 
-  async function downloadTrack(track: PlayerTrack) {
-    const url = getAbsoluteUrl(`${track.streamUrl.replace(domain, "")}?download=1&title=${encodeURIComponent(track.title)}`);
+  async function downloadTrack(track: PlayerTrack, silent = false) {
+    const url = getDownloadUrl(track);
     if (!url) return;
+    const filename = `${safeFileName(track.title)}.m4a`;
     try {
+      if (triggerWebDownload(url, filename)) {
+        if (!silent) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        return;
+      }
+      const fs = FileSystem as typeof FileSystem & {
+        downloadAsync?: (uri: string, fileUri: string) => Promise<{ uri: string }>;
+        documentDirectory?: string | null;
+        cacheDirectory?: string | null;
+      };
+      const downloadAsync = fs.downloadAsync;
+      const baseDirectory = fs.documentDirectory ?? fs.cacheDirectory;
+      if (downloadAsync && baseDirectory && Platform.OS !== "web") {
+        const result = await downloadAsync(url, `${baseDirectory}${filename}`);
+        const media = await MediaLibrary.requestPermissionsAsync();
+        if (media.granted) {
+          await MediaLibrary.saveToLibraryAsync(result.uri);
+          if (!silent) Alert.alert("تم التحميل", `اتحملت باسم ${filename}`);
+          return;
+        }
+      }
       if (Platform.OS === "android") {
         const chromeIntent = `intent:${url}#Intent;action=android.intent.action.VIEW;package=com.android.chrome;end`;
         const canOpen = await Linking.canOpenURL(chromeIntent).catch(() => false);
@@ -177,6 +235,17 @@ export default function MusicScreen() {
       await Linking.openURL(url);
     } catch {
       Alert.alert("خطأ", "تعذّر فتح التحميل");
+    }
+  }
+
+  async function downloadPlaylist() {
+    if (playlist.length === 0) return;
+    const tracks = playlist.map(toPlayerTrack);
+    Alert.alert("تحميل القائمة", `بدأ تحميل ${tracks.length} أغنية. لو المتصفح طلب السماح بتحميلات متعددة وافق عليه.`);
+    for (const [index, track] of tracks.entries()) {
+      setTimeout(() => {
+        downloadTrack(track, true);
+      }, index * 900);
     }
   }
 
@@ -275,7 +344,7 @@ export default function MusicScreen() {
         <View>
           <Text style={[styles.eyebrow, { color: colors.mutedForeground }]}>PRIVATE STREAM</Text>
           <Text style={[styles.title, { color: colors.foreground }]}>music&sk</Text>
-          <Text style={[styles.welcome, { color: colors.mutedForeground }]}>أهلاً {session.name} 👋</Text>
+          <Text style={[styles.welcome, { color: colors.mutedForeground }]}>أهلاً {session.name}</Text>
         </View>
         <Pressable onPress={session.signOut} style={[styles.roundBtn, { backgroundColor: colors.card }]}>
           <Feather name="log-out" size={20} color={colors.primary} />
@@ -284,11 +353,18 @@ export default function MusicScreen() {
 
       <View style={[styles.hero, { backgroundColor: colors.espresso }]}>
         <View style={styles.heroText}>
-          <Text style={[styles.heroLabel, { color: colors.gold }]}>قائمة مشتركة</Text>
-          <Text style={styles.heroTitle}>{playlist.length} أغنية</Text>
-          <Text style={styles.heroSub}>بحث سريع · مفضلة · تحميل</Text>
+          <Text style={[styles.heroLabel, { color: colors.gold }]}>موسيقاك الخاصة</Text>
+          <Text style={styles.heroTitle}>{playlist.length} أغنية في مكتبتك</Text>
+          <Text style={styles.heroSub}>بحث سريع · تشغيل فوري · تحميل كامل</Text>
         </View>
-        <Image source={require("@/assets/images/cover-one.png")} style={styles.heroImage} contentFit="cover" />
+        <View style={styles.heroVisual}>
+          <View style={[styles.heroDisc, { borderColor: colors.gold }]}>
+            <MaterialCommunityIcons name="music-note-eighth" size={38} color={colors.gold} />
+          </View>
+          <View style={[styles.heroWave, styles.heroWaveTall, { backgroundColor: colors.gold }]} />
+          <View style={[styles.heroWave, { backgroundColor: colors.gold }]} />
+          <View style={[styles.heroWave, styles.heroWaveShort, { backgroundColor: colors.gold }]} />
+        </View>
       </View>
 
       <View style={[styles.searchBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -347,19 +423,6 @@ export default function MusicScreen() {
         )}
       />
 
-      <View style={styles.sectionTabs}>
-        {(["home", "search", "playlist", "favorites", "device"] as Section[]).map((s) => (
-          <NavPill
-            key={s}
-            colors={colors}
-            active={section === s}
-            label={s === "home" ? "الرئيسية" : s === "search" ? "بحث" : s === "playlist" ? "القائمة" : s === "favorites" ? "المفضلة" : "جهازي"}
-            icon={s === "home" ? "home" : s === "search" ? "search" : s === "playlist" ? "list" : s === "favorites" ? "heart" : "smartphone"}
-            onPress={() => setSection(s)}
-          />
-        ))}
-      </View>
-
       {section === "home" && featured.length > 0 && (
         <>
           <Text style={[styles.sectionTitle, { color: colors.foreground }]}>مختارات</Text>
@@ -385,9 +448,17 @@ export default function MusicScreen() {
       )}
 
       {section !== "home" && section !== "device" && (
-        <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
-          {section === "playlist" ? `القائمة (${playlist.length})` : section === "favorites" ? `المفضلة (${favorites.length})` : "نتائج البحث"}
-        </Text>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
+            {section === "playlist" ? `مكتبتك (${playlist.length})` : section === "favorites" ? `المفضلة (${favorites.length})` : "نتائج البحث"}
+          </Text>
+          {section === "playlist" && playlist.length > 0 ? (
+            <Pressable onPress={downloadPlaylist} style={[styles.downloadAllBtn, { backgroundColor: colors.primary }]}>
+              <Feather name="download" size={15} color={colors.primaryForeground} />
+              <Text style={[styles.downloadAllText, { color: colors.primaryForeground }]}>تحميل الكل</Text>
+            </Pressable>
+          ) : null}
+        </View>
       )}
 
       {section === "device" && <Text style={[styles.sectionTitle, { color: colors.foreground }]}>موسيقى جهازك ({deviceTracks.length})</Text>}
@@ -406,7 +477,7 @@ export default function MusicScreen() {
           ? "القائمة فاضية"
           : section === "device"
           ? Platform.OS === "web"
-            ? "افتح التطبيق من جهازك"
+            ? "جهازي غير متاح على الموقع"
             : !mediaPermission?.granted
             ? "محتاج إذن للملفات"
             : "مفيش ملفات صوتية"
@@ -415,7 +486,7 @@ export default function MusicScreen() {
       <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
         {section === "device"
           ? Platform.OS === "web"
-            ? "موسيقى الجهاز بتشتغل بس على تطبيق الموبايل"
+            ? "المتصفح ممنوع يقرأ ملفات الصوت من جهازك للخصوصية. افتح التطبيق على الموبايل عشان يظهر صوت جهازك."
             : "اضغط على جهازي مرة تانية لو مش ظاهر إذن"
           : "دور على الأغاني وضيفها للقائمة أو المفضلة"}
       </Text>
@@ -430,7 +501,7 @@ export default function MusicScreen() {
           keyExtractor={(item) => item.id}
           ListHeaderComponent={headerComponent}
           ListEmptyComponent={emptyComponent}
-          contentContainerStyle={{ paddingBottom: activeHasTrack ? 172 : 30 }}
+          contentContainerStyle={{ paddingBottom: activeHasTrack ? 238 : 118 }}
           showsVerticalScrollIndicator={false}
           removeClippedSubviews
           initialNumToRender={15}
@@ -444,7 +515,7 @@ export default function MusicScreen() {
           keyExtractor={(item) => item.videoId}
           ListHeaderComponent={headerComponent}
           ListEmptyComponent={emptyComponent}
-          contentContainerStyle={{ paddingBottom: activeHasTrack ? 172 : 30 }}
+          contentContainerStyle={{ paddingBottom: activeHasTrack ? 238 : 118 }}
           showsVerticalScrollIndicator={false}
           removeClippedSubviews
           initialNumToRender={15}
@@ -456,7 +527,7 @@ export default function MusicScreen() {
       )}
 
       {activeHasTrack && (
-        <Pressable onPress={() => router.push("/player-modal")} style={[styles.player, { backgroundColor: colors.espresso }]}>
+        <Pressable onPress={() => router.push("/player-modal")} style={[styles.player, { backgroundColor: colors.espresso, bottom: 82 }]}>
           {currentTrack.thumbnail ? (
             <Image source={{ uri: currentTrack.thumbnail }} style={styles.playerImage} contentFit="cover" />
           ) : (
@@ -480,16 +551,24 @@ export default function MusicScreen() {
           </View>
         </Pressable>
       )}
+      <BottomNav section={section} setSection={setSection} colors={colors} />
     </View>
   );
 }
 
-function NavPill({ active, label, icon, onPress, colors }: { active: boolean; label: string; icon: keyof typeof Feather.glyphMap; onPress: () => void; colors: ReturnType<typeof useColors> }) {
+function BottomNav({ section, setSection, colors }: { section: Section; setSection: (section: Section) => void; colors: ReturnType<typeof useColors> }) {
   return (
-    <Pressable onPress={onPress} style={[styles.navPill, { backgroundColor: active ? colors.primary : colors.card, borderColor: colors.border }]}>
-      <Feather name={icon} size={14} color={active ? colors.primaryForeground : colors.primary} />
-      <Text style={[styles.navText, { color: active ? colors.primaryForeground : colors.foreground }]}>{label}</Text>
-    </Pressable>
+    <View style={[styles.bottomNav, { backgroundColor: colors.espresso, borderTopColor: colors.border }]}>
+      {navItems.map((item) => {
+        const active = section === item.section;
+        return (
+          <Pressable key={item.section} onPress={() => setSection(item.section)} style={styles.bottomNavItem}>
+            <Feather name={item.icon} size={21} color={active ? colors.primary : colors.mutedForeground} />
+            <Text style={[styles.bottomNavText, { color: active ? colors.primary : colors.mutedForeground }]}>{item.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
   );
 }
 
@@ -539,7 +618,7 @@ function DeviceTrackRow({ track, isCurrent, isPlaying, onPlay, colors }: {
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   loginShell: { flex: 1, justifyContent: "center", padding: 22, overflow: "hidden" },
-  loginGlow: { position: "absolute", width: 340, height: 340, borderRadius: 170, backgroundColor: "rgba(215,164,95,0.28)", top: 70, right: -120 },
+  loginGlow: { position: "absolute", width: 340, height: 340, borderRadius: 170, backgroundColor: "rgba(29,185,84,0.24)", top: 70, right: -120 },
   loginCard: { borderRadius: 34, padding: 24, shadowColor: "#000", shadowOpacity: 0.22, shadowRadius: 24, elevation: 8 },
   logoCircle: { width: 76, height: 76, borderRadius: 38, alignItems: "center", justifyContent: "center", marginBottom: 18 },
   loginTitle: { fontSize: 38, fontFamily: "Inter_700Bold", letterSpacing: -1.3 },
@@ -555,12 +634,16 @@ const styles = StyleSheet.create({
   title: { fontSize: 34, fontFamily: "Inter_700Bold", letterSpacing: -1.2 },
   welcome: { marginTop: 4, fontSize: 14, fontFamily: "Inter_500Medium" },
   roundBtn: { width: 46, height: 46, borderRadius: 23, alignItems: "center", justifyContent: "center" },
-  hero: { marginHorizontal: 18, borderRadius: 30, padding: 18, minHeight: 140, flexDirection: "row", overflow: "hidden" },
+  hero: { marginHorizontal: 18, borderRadius: 22, padding: 18, minHeight: 140, flexDirection: "row", overflow: "hidden" },
   heroText: { flex: 1, justifyContent: "center", zIndex: 1 },
   heroLabel: { fontSize: 13, fontFamily: "Inter_700Bold" },
-  heroTitle: { color: "#fff4df", fontSize: 27, fontFamily: "Inter_700Bold", marginTop: 6, letterSpacing: -0.6 },
-  heroSub: { color: "rgba(255,244,223,0.72)", fontSize: 13, lineHeight: 19, marginTop: 8, fontFamily: "Inter_500Medium" },
-  heroImage: { position: "absolute", width: 140, height: 140, borderRadius: 28, right: -14, bottom: -14, opacity: 0.82 },
+  heroTitle: { color: "#FFFFFF", fontSize: 27, fontFamily: "Inter_700Bold", marginTop: 6, letterSpacing: -0.6 },
+  heroSub: { color: "rgba(255,255,255,0.72)", fontSize: 13, lineHeight: 19, marginTop: 8, fontFamily: "Inter_500Medium" },
+  heroVisual: { width: 128, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 7 },
+  heroDisc: { width: 92, height: 92, borderRadius: 46, borderWidth: 2, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.06)" },
+  heroWave: { width: 7, height: 48, borderRadius: 999, opacity: 0.85 },
+  heroWaveTall: { height: 72 },
+  heroWaveShort: { height: 32 },
   searchBox: { marginHorizontal: 18, marginTop: 16, height: 54, borderRadius: 22, borderWidth: 1, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", gap: 10 },
   searchInput: { flex: 1, height: 52, fontSize: 16, fontFamily: "Inter_600SemiBold", textAlign: "right" },
   historyHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingTop: 10, paddingBottom: 2 },
@@ -569,10 +652,10 @@ const styles = StyleSheet.create({
   chips: { gap: 8, paddingHorizontal: 18, paddingVertical: 8 },
   chip: { borderRadius: 999, borderWidth: 1, paddingHorizontal: 13, paddingVertical: 9, flexDirection: "row", alignItems: "center", gap: 5 },
   chipText: { fontFamily: "Inter_700Bold", fontSize: 13 },
-  sectionTabs: { paddingHorizontal: 18, flexDirection: "row", gap: 8, flexWrap: "wrap", paddingVertical: 8 },
-  navPill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 9, flexDirection: "row", alignItems: "center", gap: 5 },
-  navText: { fontFamily: "Inter_700Bold", fontSize: 12 },
+  sectionHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingRight: 18 },
   sectionTitle: { fontSize: 20, fontFamily: "Inter_700Bold", marginHorizontal: 18, marginTop: 20, marginBottom: 10 },
+  downloadAllBtn: { flexDirection: "row", alignItems: "center", gap: 6, borderRadius: 999, paddingHorizontal: 13, paddingVertical: 9, marginTop: 12 },
+  downloadAllText: { fontSize: 12, fontFamily: "Inter_700Bold" },
   featuredRow: { paddingHorizontal: 18, gap: 12 },
   featuredCard: { width: 140, borderRadius: 22, padding: 10 },
   featuredImage: { width: "100%", height: 120, borderRadius: 16, marginBottom: 8 },
@@ -589,12 +672,15 @@ const styles = StyleSheet.create({
   empty: { margin: 18, borderRadius: 22, borderWidth: 1, padding: 24, alignItems: "center" },
   emptyTitle: { marginTop: 10, fontSize: 17, fontFamily: "Inter_700Bold" },
   emptyText: { marginTop: 6, textAlign: "center", lineHeight: 20, fontFamily: "Inter_500Medium" },
-  player: { position: "absolute", left: 12, right: 12, bottom: 8, borderRadius: 26, paddingTop: 10, paddingHorizontal: 12, paddingBottom: 10, flexDirection: "row", alignItems: "center", gap: 12, shadowColor: "#000", shadowOpacity: 0.35, shadowRadius: 20, elevation: 12 },
+  player: { position: "absolute", left: 12, right: 12, borderRadius: 10, paddingTop: 10, paddingHorizontal: 12, paddingBottom: 10, flexDirection: "row", alignItems: "center", gap: 12, shadowColor: "#000", shadowOpacity: 0.35, shadowRadius: 20, elevation: 12 },
   playerImage: { width: 50, height: 50, borderRadius: 15 },
   playerInfo: { flex: 1, minWidth: 0 },
-  playerTitle: { color: "#fff4df", fontSize: 14, fontFamily: "Inter_700Bold" },
-  playerArtist: { color: "rgba(255,244,223,0.65)", fontSize: 12, fontFamily: "Inter_500Medium", marginTop: 2 },
+  playerTitle: { color: "#FFFFFF", fontSize: 14, fontFamily: "Inter_700Bold" },
+  playerArtist: { color: "rgba(255,255,255,0.65)", fontSize: 12, fontFamily: "Inter_500Medium", marginTop: 2 },
   playBtn: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
   progressMini: { position: "absolute", left: 0, right: 0, bottom: 0, height: 3, borderBottomLeftRadius: 26, borderBottomRightRadius: 26, overflow: "hidden" },
   progressMiniFill: { height: 3 },
+  bottomNav: { position: "absolute", left: 0, right: 0, bottom: 0, height: 76, borderTopWidth: 1, flexDirection: "row", alignItems: "center", justifyContent: "space-around", paddingTop: 8, paddingBottom: 10 },
+  bottomNavItem: { flex: 1, alignItems: "center", justifyContent: "center", gap: 4 },
+  bottomNavText: { fontSize: 10.5, fontFamily: "Inter_700Bold" },
 });
