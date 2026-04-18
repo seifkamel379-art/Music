@@ -42,12 +42,57 @@ router.get("/music/search", async (req, res, next) => {
       artist: item.author ?? item.artist ?? "فنان غير معروف",
       duration: item.duration ?? "0:00",
       thumbnail: item.thumbnail ?? null,
-      streamUrl: `${EXTERNAL_API}/api/proxy?id=${item.videoId}`,
+      streamUrl: `/api/music/stream?id=${item.videoId}`,
     }));
 
     res.json(tracks);
   } catch (error) {
     next(error);
+  }
+});
+
+router.get("/music/stream", async (req, res, next) => {
+  try {
+    const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
+    if (!id) { res.status(400).json({ message: "Missing id" }); return; }
+
+    const { spawn } = await import("child_process");
+
+    const ytUrl = `https://www.youtube.com/watch?v=${id}`;
+    const ytdlp = spawn("yt-dlp", [
+      "--no-playlist",
+      "-x",
+      "--audio-format", "mp3",
+      "--audio-quality", "0",
+      "-o", "-",
+      ytUrl,
+    ]);
+
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+
+    ytdlp.stdout.pipe(res);
+
+    ytdlp.stderr.on("data", (chunk: Buffer) => {
+      console.error("[yt-dlp stream]", chunk.toString());
+    });
+
+    req.on("close", () => ytdlp.kill());
+
+    ytdlp.on("error", (err: Error) => {
+      console.error("[yt-dlp stream] spawn error", err);
+      if (!res.headersSent) next(err);
+      else if (!res.writableEnded) res.end();
+    });
+
+    ytdlp.on("close", (code: number) => {
+      if (code !== 0) console.error(`[yt-dlp stream] exited with code ${code}`);
+      if (!res.writableEnded) res.end();
+    });
+  } catch (error) {
+    if (!res.headersSent) next(error);
+    else if (!res.writableEnded) res.end();
   }
 });
 

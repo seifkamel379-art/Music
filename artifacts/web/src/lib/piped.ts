@@ -1,5 +1,3 @@
-const EXTERNAL_API = "https://c68167c1-9d98-42f1-9e56-fa1768e61a90-00-tvhwnarqg09z.worf.replit.dev";
-
 export type PipedTrack = {
   videoId: string;
   title: string;
@@ -10,7 +8,7 @@ export type PipedTrack = {
 };
 
 export async function searchTracks(query: string): Promise<PipedTrack[]> {
-  const res = await fetch(`${EXTERNAL_API}/api/search?q=${encodeURIComponent(query)}`, {
+  const res = await fetch(`/api/music/search?q=${encodeURIComponent(query)}`, {
     signal: AbortSignal.timeout(15000),
   });
   if (!res.ok) throw new Error(`البحث فشل: ${res.status}`);
@@ -22,10 +20,10 @@ export async function searchTracks(query: string): Promise<PipedTrack[]> {
     artist: item.author ?? item.artist ?? "فنان غير معروف",
     duration: item.duration ?? "0:00",
     thumbnail: item.thumbnail ?? null,
-    streamUrl: `${EXTERNAL_API}/api/proxy?id=${item.videoId}`,
+    streamUrl: `/api/music/stream?id=${item.videoId}`,
   }));
 }
 
 export function resolveStreamUrl(videoId: string): Promise<string> {
-  return Promise.resolve(`${EXTERNAL_API}/api/proxy?id=${videoId}`);
+  return Promise.resolve(`/api/music/stream?id=${videoId}`);
 }

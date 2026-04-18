@@ -77,10 +77,8 @@ function safeFileName(title: string) {
   );
 }
 
-function getDownloadUrl(track: Pick<PlayerTrack, "streamUrl" | "title">) {
-  const relativePath = track.streamUrl.startsWith(domain) ? track.streamUrl.slice(domain.length) : track.streamUrl;
-  const separator = relativePath.includes("?") ? "&" : "?";
-  return getAbsoluteUrl(`${relativePath}${separator}download=1&title=${encodeURIComponent(track.title)}`);
+function getDownloadUrl(track: Pick<PlayerTrack, "streamUrl" | "title" | "videoId">) {
+  return getAbsoluteUrl(`/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`);
 }
 
 function triggerWebDownload(url: string, filename: string) {
