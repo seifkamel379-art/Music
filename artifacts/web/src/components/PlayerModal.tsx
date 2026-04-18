@@ -93,8 +93,9 @@ export default function PlayerModal({ onClose, C }: Props) {
             </div>
         }
         {status.isBuffering && (
-          <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <span style={{ color: "#fff", fontSize: 16, fontWeight: 700, direction: "rtl" }}>تحميل...</span>
+          <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14 }}>
+            <div style={{ width: 52, height: 52, borderRadius: "50%", border: "4px solid rgba(255,255,255,0.2)", borderTopColor: "#1DB954", animation: "spin 0.8s linear infinite" }} />
+            <span style={{ color: "rgba(255,255,255,0.85)", fontSize: 14, fontWeight: 600, direction: "rtl" }}>جارٍ التحميل...</span>
           </div>
         )}
       </div>
@@ -115,7 +116,7 @@ export default function PlayerModal({ onClose, C }: Props) {
           <div style={{ width: "100%", height: 5, borderRadius: 3, background: "rgba(255,244,223,0.15)", position: "relative" }}>
             <div style={{ height: 5, borderRadius: 3, background: C.gold, width: `${displayProgress * 100}%` }} />
           </div>
-          <div style={{ position: "absolute", top: "50%", left: 0, width: 20, height: 20, borderRadius: "50%", background: C.gold, boxShadow: "0 0 8px #1DB95499", pointerEvents: "none", transform: `translateX(calc(${displayProgress * 100}% - 10px)) translateY(-50%)` }} />
+          <div style={{ position: "absolute", top: "50%", left: `calc(${displayProgress * 100}% - 10px)`, width: 20, height: 20, borderRadius: "50%", background: C.gold, boxShadow: "0 0 8px #1DB95499", pointerEvents: "none", transform: "translateY(-50%)", transition: dragging.current ? "none" : "left 0.1s linear" }} />
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10 }}>
           <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 13 }}>{fmt(status.currentTime)}</span>

@@ -22,10 +22,8 @@ function safeTitle(name: string) {
   return name.replace(/\.[^/.]+$/, "").slice(0, 60) || "أغنية";
 }
 
-async function downloadTrack(track: Track) {
-  const url = track.streamUrl;
-  Object.assign(document.createElement("a"), { href: url, target: "_blank", rel: "noopener" })
-    .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+function downloadTrack(track: Track) {
+  window.open(track.streamUrl, "_blank", "noopener,noreferrer");
 }
 
 function toTrack(t: { videoId: string; title: string; artist: string; duration: string; thumbnail?: string | null; streamUrl: string }): Track {
