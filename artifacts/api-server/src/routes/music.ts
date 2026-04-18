@@ -51,4 +51,54 @@ router.get("/music/search", async (req, res, next) => {
   }
 });
 
+router.get("/music/download", async (req, res, next) => {
+  try {
+    const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
+    const rawTitle = typeof req.query.title === "string" ? req.query.title.trim() : "track";
+
+    if (!id) { res.status(400).json({ message: "Missing id" }); return; }
+
+    const safeTitle = rawTitle
+      .replace(/[^\w\u0600-\u06FF\s\-().]/g, "")
+      .trim()
+      .replace(/\s+/g, "_")
+      .slice(0, 120) || `track-${id}`;
+
+    const upstream = await fetch(`${EXTERNAL_API}/api/proxy?id=${encodeURIComponent(id)}`);
+
+    if (!upstream.ok || !upstream.body) {
+      res.status(502).json({ message: "Could not fetch audio" });
+      return;
+    }
+
+    const contentType = upstream.headers.get("content-type") ?? "audio/mpeg";
+    const ext = contentType.includes("webm") ? "webm" : contentType.includes("ogg") ? "ogg" : "mp3";
+
+    // filename= must be ASCII only; filename*= carries the full UTF-8 name
+    const asciiFilename = `track-${id}.${ext}`;
+    const utf8Filename = encodeURIComponent(`${safeTitle}.${ext}`);
+
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Disposition", `attachment; filename="${asciiFilename}"; filename*=UTF-8''${utf8Filename}`);
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+
+    const reader = upstream.body.getReader();
+    const pump = async () => {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) { res.end(); break; }
+        if (!res.writableEnded) res.write(value);
+        else { reader.cancel(); break; }
+      }
+    };
+
+    req.on("close", () => reader.cancel().catch(() => {}));
+    await pump();
+  } catch (error) {
+    if (!res.headersSent) next(error);
+    else if (!res.writableEnded) res.end();
+  }
+});
+
 export default router;

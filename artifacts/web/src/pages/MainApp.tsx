@@ -23,7 +23,13 @@ function safeTitle(name: string) {
 }
 
 function downloadTrack(track: Track) {
-  window.open(track.streamUrl, "_blank", "noopener,noreferrer");
+  const url = `/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`;
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${track.title}.mp3`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
 function toTrack(t: { videoId: string; title: string; artist: string; duration: string; thumbnail?: string | null; streamUrl: string }): Track {
