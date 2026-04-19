@@ -61,7 +61,8 @@ This is a pnpm workspace monorepo. The active product is **Seif music**, a priva
 - The web app proxies `/api/*` to the local API server in development, keeping backend logic and private checks off the client.
 - The preview is served from the Vite web app on port `8080`; API health is available through the proxy at `/api/healthz`.
 - `yt-dlp` and `ffmpeg` are explicitly included in `replit.nix` so search, stream conversion, and MP3 downloads work after publishing.
-- Stream/download routes pipe `yt-dlp` stdout directly into `ffmpeg`, then pipe MP3 output directly to the browser; files are not buffered into server RAM.
+- Stream/download routes send audio/download headers immediately, pipe `yt-dlp` stdout directly into `ffmpeg`, then pipe MP3 output directly to the browser; files are not buffered into server RAM.
+- API startup verifies both `yt-dlp` and `ffmpeg` are available so publishing fails clearly if either runtime tool is missing.
 
 ## Web App (React + Vite)
 

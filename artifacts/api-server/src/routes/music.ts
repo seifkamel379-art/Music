@@ -3,6 +3,7 @@ import { z } from "zod/v4";
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from "child_process";
 import { promisify } from "util";
 import type { Request, Response, NextFunction } from "express";
+import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 const PASSWORD = "16168080";
@@ -83,7 +84,12 @@ function createYtDlpAudioProcess(videoId: string): ChildProcessWithoutNullStream
   ], { stdio: ["pipe", "pipe", "pipe"] });
 }
 
-function streamMp3(req: Request, res: Response, videoId: string, bitrate: "128k" | "192k", onHeaders: () => void, next: NextFunction) {
+function streamMp3(res: Response, videoId: string, bitrate: "128k" | "192k", onHeaders: () => void, next: NextFunction) {
+  onHeaders();
+  if (typeof res.flushHeaders === "function") {
+    res.flushHeaders();
+  }
+
   const ytdlp = createYtDlpAudioProcess(videoId);
   const ff = spawn("ffmpeg", [
     "-i", "pipe:0",
@@ -91,11 +97,20 @@ function streamMp3(req: Request, res: Response, videoId: string, bitrate: "128k"
     "-f", "mp3", "-",
   ], { stdio: ["pipe", "pipe", "pipe"] });
 
+  let ytdlpStderr = "";
+  let ffmpegStderr = "";
+
   ytdlp.stdout.pipe(ff.stdin);
-  ytdlp.stderr.on("data", () => {});
-  ff.stderr.on("data", () => {});
-  ytdlp.on("error", e => { if (!res.headersSent) next(e); else if (!res.writableEnded) res.end(); });
-  ff.on("error", e => { if (!res.headersSent) next(e); else if (!res.writableEnded) res.end(); });
+  ytdlp.stderr.on("data", chunk => { ytdlpStderr = `${ytdlpStderr}${chunk}`.slice(-2000); });
+  ff.stderr.on("data", chunk => { ffmpegStderr = `${ffmpegStderr}${chunk}`.slice(-2000); });
+  ytdlp.on("error", e => {
+    logger.error({ err: e, videoId }, "yt-dlp process failed");
+    if (!res.headersSent) next(e); else if (!res.writableEnded) res.end();
+  });
+  ff.on("error", e => {
+    logger.error({ err: e, videoId }, "ffmpeg process failed");
+    if (!res.headersSent) next(e); else if (!res.writableEnded) res.end();
+  });
   ff.stdin.on("error", () => {});
 
   let sentAudio = false;
@@ -108,21 +123,22 @@ function streamMp3(req: Request, res: Response, videoId: string, bitrate: "128k"
     try { ff.kill("SIGKILL"); } catch {}
   };
 
-  req.on("close", cleanup);
+  res.on("close", cleanup);
   ff.stdout.on("data", chunk => {
-    if (!sentAudio) {
-      sentAudio = true;
-      onHeaders();
-    }
+    sentAudio = true;
     res.write(chunk);
   });
   ff.stdout.on("end", () => {
     if (!res.writableEnded) res.end();
   });
-  ff.on("close", () => {
-    if (!sentAudio && !res.headersSent) {
-      res.status(502).json({ message: "Audio conversion failed" });
-      return;
+  ytdlp.on("close", code => {
+    if (code && code !== 0) {
+      logger.error({ code, videoId, stderr: ytdlpStderr }, "yt-dlp exited before audio completed");
+    }
+  });
+  ff.on("close", code => {
+    if (!sentAudio) {
+      logger.error({ code, videoId, ytdlpStderr, ffmpegStderr }, "Audio conversion ended without output");
     }
     if (!res.writableEnded) res.end();
   });
@@ -132,7 +148,7 @@ router.get("/music/stream", async (req: Request, res: Response, next: NextFuncti
   const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
   if (!id) { res.status(400).json({ message: "Missing id" }); return; }
 
-  streamMp3(req, res, id, "128k", () => {
+  streamMp3(res, id, "128k", () => {
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Cache-Control", "no-cache, no-store");
     res.setHeader("Accept-Ranges", "none");
@@ -154,7 +170,7 @@ router.get("/music/download", async (req: Request, res: Response, next: NextFunc
     .replace(/\s+/g, "_").slice(0, 120) || `track-${id}`;
   const filename = `${safeTitle}.mp3`;
 
-  streamMp3(req, res, id, "192k", () => {
+  streamMp3(res, id, "192k", () => {
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Content-Disposition", `attachment; filename="track.mp3"; filename*=UTF-8''${encodeURIComponent(filename)}`);
     res.setHeader("Cache-Control", "no-cache");
