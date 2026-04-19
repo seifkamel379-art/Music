@@ -42,7 +42,7 @@ router.get("/music/search", async (req, res, next) => {
       artist: item.author ?? item.artist ?? "فنان غير معروف",
       duration: item.duration ?? "0:00",
       thumbnail: item.thumbnail ?? null,
-      streamUrl: `/api/music/stream?id=${item.videoId}`,
+      streamUrl: `${EXTERNAL_API}/api/proxy?id=${item.videoId}`,
     }));
 
     res.json(tracks);
@@ -56,40 +56,35 @@ router.get("/music/stream", async (req, res, next) => {
     const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
     if (!id) { res.status(400).json({ message: "Missing id" }); return; }
 
-    const { spawn } = await import("child_process");
+    const upstream = await fetch(`${EXTERNAL_API}/api/proxy?id=${encodeURIComponent(id)}`, {
+      signal: AbortSignal.timeout(30000),
+    });
 
-    const ytUrl = `https://www.youtube.com/watch?v=${id}`;
-    const ytdlp = spawn("yt-dlp", [
-      "--no-playlist",
-      "-x",
-      "--audio-format", "mp3",
-      "--audio-quality", "0",
-      "-o", "-",
-      ytUrl,
-    ]);
+    if (!upstream.ok) {
+      res.status(upstream.status).json({ message: "Stream error" });
+      return;
+    }
 
-    res.setHeader("Content-Type", "audio/mpeg");
+    const contentType = upstream.headers.get("content-type") ?? "audio/mp4";
+    res.setHeader("Content-Type", contentType);
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Access-Control-Allow-Origin", "*");
 
-    ytdlp.stdout.pipe(res);
-
-    ytdlp.stderr.on("data", (chunk: Buffer) => {
-      console.error("[yt-dlp stream]", chunk.toString());
-    });
-
-    req.on("close", () => ytdlp.kill());
-
-    ytdlp.on("error", (err: Error) => {
-      console.error("[yt-dlp stream] spawn error", err);
-      if (!res.headersSent) next(err);
-      else if (!res.writableEnded) res.end();
-    });
-
-    ytdlp.on("close", (code: number) => {
-      if (code !== 0) console.error(`[yt-dlp stream] exited with code ${code}`);
+    const reader = upstream.body!.getReader();
+    const pump = async () => {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(value);
+      }
+      res.end();
+    };
+    pump().catch((err) => {
       if (!res.writableEnded) res.end();
+      console.error("[stream proxy]", err);
     });
+
+    req.on("close", () => reader.cancel());
   } catch (error) {
     if (!res.headersSent) next(error);
     else if (!res.writableEnded) res.end();
@@ -109,44 +104,39 @@ router.get("/music/download", async (req, res, next) => {
       .replace(/\s+/g, "_")
       .slice(0, 120) || `track-${id}`;
 
-    const asciiFilename = `track-${id}.mp3`;
-    const utf8Filename = encodeURIComponent(`${safeTitle}.mp3`);
+    const asciiFilename = `track-${id}.m4a`;
+    const utf8Filename = encodeURIComponent(`${safeTitle}.m4a`);
 
-    res.setHeader("Content-Type", "audio/mpeg");
+    const upstream = await fetch(`${EXTERNAL_API}/api/proxy?id=${encodeURIComponent(id)}`, {
+      signal: AbortSignal.timeout(30000),
+    });
+
+    if (!upstream.ok) {
+      res.status(upstream.status).json({ message: "Download error" });
+      return;
+    }
+
+    const contentType = upstream.headers.get("content-type") ?? "audio/mp4";
+    res.setHeader("Content-Type", contentType);
     res.setHeader("Content-Disposition", `attachment; filename="${asciiFilename}"; filename*=UTF-8''${utf8Filename}`);
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Access-Control-Allow-Origin", "*");
 
-    const { spawn } = await import("child_process");
-
-    const ytUrl = `https://www.youtube.com/watch?v=${id}`;
-    const ytdlp = spawn("yt-dlp", [
-      "--no-playlist",
-      "-x",
-      "--audio-format", "mp3",
-      "--audio-quality", "0",
-      "-o", "-",
-      ytUrl,
-    ]);
-
-    ytdlp.stdout.pipe(res);
-
-    ytdlp.stderr.on("data", (chunk: Buffer) => {
-      console.error("[yt-dlp]", chunk.toString());
-    });
-
-    req.on("close", () => ytdlp.kill());
-
-    ytdlp.on("error", (err: Error) => {
-      console.error("[yt-dlp] spawn error", err);
-      if (!res.headersSent) next(err);
-      else if (!res.writableEnded) res.end();
-    });
-
-    ytdlp.on("close", (code: number) => {
-      if (code !== 0) console.error(`[yt-dlp] exited with code ${code}`);
+    const reader = upstream.body!.getReader();
+    const pump = async () => {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(value);
+      }
+      res.end();
+    };
+    pump().catch((err) => {
       if (!res.writableEnded) res.end();
+      console.error("[download proxy]", err);
     });
+
+    req.on("close", () => reader.cancel());
   } catch (error) {
     if (!res.headersSent) next(error);
     else if (!res.writableEnded) res.end();

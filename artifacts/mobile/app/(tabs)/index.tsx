@@ -77,8 +77,10 @@ function safeFileName(title: string) {
   );
 }
 
+const EXTERNAL_API = "https://youtube-stream-api--seifmusic7.replit.app";
+
 function getDownloadUrl(track: Pick<PlayerTrack, "streamUrl" | "title" | "videoId">) {
-  return getAbsoluteUrl(`/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`);
+  return `${EXTERNAL_API}/api/proxy?id=${encodeURIComponent(track.videoId)}`;
 }
 
 function triggerWebDownload(url: string, filename: string) {

@@ -25,20 +25,20 @@ function safeTitle(name: string) {
 async function downloadTrack(track: Track, setDownloading: React.Dispatch<React.SetStateAction<Set<string>>>) {
   setDownloading(prev => new Set([...prev, track.videoId]));
   try {
-    const downloadUrl = `${API_BASE}/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`;
+    const downloadUrl = `${API_BASE}/api/proxy?id=${encodeURIComponent(track.videoId)}`;
     const res = await fetch(downloadUrl);
     if (!res.ok) throw new Error("fetch failed");
     const blob = await res.blob();
     const blobUrl = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = blobUrl;
-    a.download = `${track.title}.mp3`;
+    a.download = `${track.title}.m4a`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
   } catch {
-    window.open(`${API_BASE}/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`, "_blank", "noopener,noreferrer");
+    window.open(`${API_BASE}/api/proxy?id=${encodeURIComponent(track.videoId)}`, "_blank", "noopener,noreferrer");
   } finally {
     setDownloading(prev => { const next = new Set(prev); next.delete(track.videoId); return next; });
   }
