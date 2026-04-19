@@ -18,6 +18,15 @@ function fmtDuration(seconds: number): string {
   return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
 }
 
+/* Common yt-dlp flags that speed things up on cloud servers */
+const YTDLP_FAST_FLAGS = [
+  "--no-warnings",
+  "--no-check-certificate",
+  "--socket-timeout", "15",
+  "--geo-bypass",
+  "--extractor-args", "youtube:skip=hls,dash,translated_subs",
+];
+
 router.post("/music/login", (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success || parsed.data.password !== PASSWORD) {
@@ -32,13 +41,24 @@ router.get("/music/search", async (req: Request, res: Response, next: NextFuncti
     const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
     if (!q) { res.json([]); return; }
 
-    const { stdout } = await execFileAsync("yt-dlp", [
-      "--flat-playlist",
-      "--dump-json",
-      "--no-warnings",
-      "--no-check-certificate",
-      `ytsearch20:${q}`,
-    ], { timeout: 25000 });
+    let stdout = "";
+    try {
+      const result = await execFileAsync("yt-dlp", [
+        "--flat-playlist",
+        "--dump-json",
+        ...YTDLP_FAST_FLAGS,
+        `ytsearch10:${q}`,       /* 10 results instead of 20 — much faster */
+      ], { timeout: 45000 });    /* 45s timeout instead of 25s */
+      stdout = result.stdout;
+    } catch (err: any) {
+      /* If yt-dlp times out or partially fails, use whatever output we got */
+      stdout = err?.stdout ?? "";
+      if (!stdout.trim()) {
+        /* Complete failure — return empty list gracefully */
+        res.json([]);
+        return;
+      }
+    }
 
     const tracks = stdout.trim().split("\n").filter(Boolean).map((line) => {
       try {
@@ -68,12 +88,11 @@ function spawnMp3Stream(videoId: string, quality = "0") {
     "--audio-format", "mp3",
     "--audio-quality", quality,
     "-o", "-",
-    "--no-warnings",
+    ...YTDLP_FAST_FLAGS,
     "--no-playlist",
-    "--no-check-certificate",
-    "--geo-bypass",
-    "--retries", "3",
-    "--fragment-retries", "3",
+    "--retries", "5",
+    "--fragment-retries", "5",
+    "--buffer-size", "16K",
     `https://www.youtube.com/watch?v=${videoId}`,
   ], { stdio: ["ignore", "pipe", "pipe"] });
 }
