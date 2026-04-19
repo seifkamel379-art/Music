@@ -42,6 +42,18 @@ This is a pnpm workspace monorepo. The active product is **Seif music**, a priva
 - Main scroll uses a single `FlatList` with `ListHeaderComponent` — lag-free scrolling.
 - `vercel.json` in root for PWA/web deployment of the Expo web export. Run `pnpm --filter @workspace/mobile run build:web` to generate `dist/`.
 
+## UI Design
+
+- Complete Spotify clone design: black background, green (#1DB954) accent, card-based layout
+- Bottom tab bar: Home, Search, Library, Device
+- Home page: 20 horizontal-scroll sections with 2026 artists/genres
+- Search: category grid + live search results
+- Library: playlist + favorites with filter chips
+- Device: local file playback (blob URLs, never uploaded)
+- Mini player: compact bar above tab bar with progress bar
+- Full player modal: large album art, Spotify-style controls
+- No Vercel or Netlify config files
+
 ## Replit Migration
 
 - The Replit development workflow is `Start application`.

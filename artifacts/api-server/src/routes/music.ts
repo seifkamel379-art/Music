@@ -36,22 +36,25 @@ router.get("/music/search", async (req: Request, res: Response, next: NextFuncti
       "--flat-playlist",
       "--dump-json",
       "--no-warnings",
-      `ytsearch15:${q}`,
-    ], { timeout: 20000 });
+      "--no-check-certificate",
+      `ytsearch20:${q}`,
+    ], { timeout: 25000 });
 
     const tracks = stdout.trim().split("\n").filter(Boolean).map((line) => {
-      const item = JSON.parse(line);
-      const videoId: string = item.id ?? "";
-      const duration: number = typeof item.duration === "number" ? item.duration : 0;
-      return {
-        videoId,
-        title: item.title ?? "بدون عنوان",
-        artist: item.uploader ?? item.channel ?? "فنان غير معروف",
-        duration: fmtDuration(duration),
-        thumbnail: `https://i.ytimg.com/vi/${videoId}/hq720.jpg`,
-        streamUrl: `/api/music/stream?id=${videoId}`,
-      };
-    }).filter((t) => t.videoId);
+      try {
+        const item = JSON.parse(line);
+        const videoId: string = item.id ?? "";
+        const duration: number = typeof item.duration === "number" ? item.duration : 0;
+        return {
+          videoId,
+          title: item.title ?? "بدون عنوان",
+          artist: item.uploader ?? item.channel ?? "فنان غير معروف",
+          duration: fmtDuration(duration),
+          thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+          streamUrl: `/api/music/stream?id=${videoId}`,
+        };
+      } catch { return null; }
+    }).filter((t): t is NonNullable<typeof t> => !!t && !!t.videoId);
 
     res.json(tracks);
   } catch (error) {
@@ -59,25 +62,18 @@ router.get("/music/search", async (req: Request, res: Response, next: NextFuncti
   }
 });
 
-function pipeYtdlpMp3(videoId: string, req: Request, res: Response, next: NextFunction) {
-  const ytdlp = spawn("yt-dlp", [
+function spawnMp3Stream(videoId: string) {
+  return spawn("yt-dlp", [
     "-x",
     "--audio-format", "mp3",
-    "--audio-quality", "5",
+    "--audio-quality", "0",
     "-o", "-",
     "--no-warnings",
     "--no-playlist",
-    `https://youtube.com/watch?v=${videoId}`,
-  ]);
-
-  ytdlp.stdout.pipe(res);
-  ytdlp.stderr.on("data", () => {});
-  req.on("close", () => { try { ytdlp.kill("SIGKILL"); } catch {} });
-  ytdlp.on("close", () => { if (!res.writableEnded) res.end(); });
-  ytdlp.on("error", (err) => {
-    if (!res.headersSent) next(err);
-    else if (!res.writableEnded) res.end();
-  });
+    "--no-check-certificate",
+    "--retries", "3",
+    `https://www.youtube.com/watch?v=${videoId}`,
+  ], { stdio: ["ignore", "pipe", "pipe"] });
 }
 
 router.get("/music/stream", (req: Request, res: Response, next: NextFunction) => {
@@ -85,11 +81,23 @@ router.get("/music/stream", (req: Request, res: Response, next: NextFunction) =>
   if (!id) { res.status(400).json({ message: "Missing id" }); return; }
 
   res.setHeader("Content-Type", "audio/mpeg");
-  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Cache-Control", "no-cache, no-store");
+  res.setHeader("Accept-Ranges", "none");
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Transfer-Encoding", "chunked");
+  res.setHeader("X-Content-Type-Options", "nosniff");
 
-  pipeYtdlpMp3(id, req, res, next);
+  const ytdlp = spawnMp3Stream(id);
+
+  ytdlp.stderr.on("data", () => {});
+
+  ytdlp.on("error", (err) => {
+    if (!res.headersSent) next(err);
+    else if (!res.writableEnded) res.end();
+  });
+
+  req.on("close", () => { try { ytdlp.kill("SIGKILL"); } catch {} });
+  ytdlp.on("close", () => { if (!res.writableEnded) res.end(); });
+  ytdlp.stdout.pipe(res, { end: true });
 });
 
 router.get("/music/download", (req: Request, res: Response, next: NextFunction) => {
@@ -101,13 +109,25 @@ router.get("/music/download", (req: Request, res: Response, next: NextFunction) 
     .replace(/[^\w\u0600-\u06FF\s\-().]/g, "")
     .trim().replace(/\s+/g, "_").slice(0, 120) || `track-${id}`;
 
+  const filename = `${safeTitle}.mp3`;
+
   res.setHeader("Content-Type", "audio/mpeg");
-  res.setHeader("Content-Disposition", `attachment; filename="track-${id}.mp3"; filename*=UTF-8''${encodeURIComponent(safeTitle + ".mp3")}`);
+  res.setHeader("Content-Disposition", `attachment; filename="track.mp3"; filename*=UTF-8''${encodeURIComponent(filename)}`);
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Transfer-Encoding", "chunked");
 
-  pipeYtdlpMp3(id, req, res, next);
+  const ytdlp = spawnMp3Stream(id);
+
+  ytdlp.stderr.on("data", () => {});
+
+  ytdlp.on("error", (err) => {
+    if (!res.headersSent) next(err);
+    else if (!res.writableEnded) res.end();
+  });
+
+  req.on("close", () => { try { ytdlp.kill("SIGKILL"); } catch {} });
+  ytdlp.on("close", () => { if (!res.writableEnded) res.end(); });
+  ytdlp.stdout.pipe(res, { end: true });
 });
 
 export default router;
