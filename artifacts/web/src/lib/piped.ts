@@ -20,10 +20,10 @@ export async function searchTracks(query: string): Promise<PipedTrack[]> {
     artist: item.author ?? item.artist ?? "فنان غير معروف",
     duration: item.duration ?? "0:00",
     thumbnail: item.thumbnail ?? null,
-    streamUrl: `/api/proxy?id=${item.videoId}`,
+    streamUrl: `/api/stream?id=${item.videoId}`,
   }));
 }
 
 export function resolveStreamUrl(videoId: string): Promise<string> {
-  return Promise.resolve(`/api/proxy?id=${videoId}`);
+  return Promise.resolve(`/api/stream?id=${videoId}`);
 }

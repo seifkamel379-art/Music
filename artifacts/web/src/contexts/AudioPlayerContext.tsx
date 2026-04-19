@@ -122,13 +122,25 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     };
   }, []);
 
+  async function resolveAudioUrl(streamUrl: string): Promise<string> {
+    if (!streamUrl.includes("/api/stream")) return streamUrl;
+    try {
+      const res = await fetch(streamUrl);
+      if (!res.ok) throw new Error("stream resolve failed");
+      const data = await res.json();
+      return data.audioUrl ?? streamUrl;
+    } catch {
+      return streamUrl;
+    }
+  }
+
   async function loadAndPlay(track: Track) {
     const audio = audioRef.current; if (!audio) return;
     setCurrentTrack(track);
     setStatus({ playing: false, currentTime: 0, duration: 0, isBuffering: true });
     updateMediaSession(track, false);
 
-    const url = track.streamUrl;
+    const url = await resolveAudioUrl(track.streamUrl);
     audio.src = url;
     audio.load();
     audio.play().catch(() => {});
