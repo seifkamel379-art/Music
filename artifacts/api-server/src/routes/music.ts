@@ -62,16 +62,18 @@ router.get("/music/search", async (req: Request, res: Response, next: NextFuncti
   }
 });
 
-function spawnMp3Stream(videoId: string) {
+function spawnMp3Stream(videoId: string, quality = "0") {
   return spawn("yt-dlp", [
     "-x",
     "--audio-format", "mp3",
-    "--audio-quality", "0",
+    "--audio-quality", quality,
     "-o", "-",
     "--no-warnings",
     "--no-playlist",
     "--no-check-certificate",
+    "--geo-bypass",
     "--retries", "3",
+    "--fragment-retries", "3",
     `https://www.youtube.com/watch?v=${videoId}`,
   ], { stdio: ["ignore", "pipe", "pipe"] });
 }
@@ -116,7 +118,7 @@ router.get("/music/download", (req: Request, res: Response, next: NextFunction) 
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Access-Control-Allow-Origin", "*");
 
-  const ytdlp = spawnMp3Stream(id);
+  const ytdlp = spawnMp3Stream(id, "5");
 
   ytdlp.stderr.on("data", () => {});
 

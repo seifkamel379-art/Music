@@ -54,10 +54,8 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     playing: false, currentTime: 0, duration: 0, isBuffering: false,
   });
 
-  /* Keep queueRef in sync */
   useEffect(() => { queueRef.current = queue; }, [queue]);
 
-  /* Setup audio element once */
   useEffect(() => {
     const audio = new Audio();
     audio.preload = "auto";
@@ -75,6 +73,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     };
     const onWait = () => setStatus(s => ({ ...s, isBuffering: true }));
     const onCan = () => setStatus(s => ({ ...s, isBuffering: false }));
+    const onError = () => setStatus(s => ({ ...s, isBuffering: false, playing: false }));
     const onEnd = () => {
       const next = currentIdxRef.current + 1;
       const q = queueRef.current;
@@ -88,9 +87,9 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     audio.addEventListener("pause", onPause);
     audio.addEventListener("waiting", onWait);
     audio.addEventListener("canplay", onCan);
+    audio.addEventListener("error", onError);
     audio.addEventListener("ended", onEnd);
 
-    /* Media Session handlers */
     if ("mediaSession" in navigator) {
       navigator.mediaSession.setActionHandler("play", () => audio.play().catch(() => {}));
       navigator.mediaSession.setActionHandler("pause", () => audio.pause());
@@ -118,30 +117,18 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       audio.removeEventListener("pause", onPause);
       audio.removeEventListener("waiting", onWait);
       audio.removeEventListener("canplay", onCan);
+      audio.removeEventListener("error", onError);
       audio.removeEventListener("ended", onEnd);
     };
   }, []);
 
-  async function resolveAudioUrl(streamUrl: string): Promise<string> {
-    if (!streamUrl.includes("/api/stream")) return streamUrl;
-    try {
-      const res = await fetch(streamUrl);
-      if (!res.ok) throw new Error("stream resolve failed");
-      const data = await res.json();
-      return data.audioUrl ?? streamUrl;
-    } catch {
-      return streamUrl;
-    }
-  }
-
-  async function loadAndPlay(track: Track) {
-    const audio = audioRef.current; if (!audio) return;
+  function loadAndPlay(track: Track) {
+    const audio = audioRef.current;
+    if (!audio) return;
     setCurrentTrack(track);
     setStatus({ playing: false, currentTime: 0, duration: 0, isBuffering: true });
     updateMediaSession(track, false);
-
-    const url = await resolveAudioUrl(track.streamUrl);
-    audio.src = url;
+    audio.src = track.streamUrl;
     audio.load();
     audio.play().catch(() => {});
   }

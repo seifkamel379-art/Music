@@ -2,7 +2,6 @@
 @import "tw-animate-css";
 
 :root {
-  /* Dark theme - exact match of mobile dark colors */
   --background: #000000;
   --foreground: #FFFFFF;
   --card: #121212;
@@ -46,7 +45,7 @@
   ::selection { background: #1DB95444; color: #fff; }
 }
 
-/* === SPLASH ANIMATIONS === */
+/* === ANIMATIONS === */
 @keyframes splash-pulse {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.06); }
@@ -102,6 +101,16 @@
   to   { opacity: 1; transform: translateX(0); }
 }
 
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.45; }
+}
+
+@keyframes fade-scale-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
 /* Utility classes */
 .splash-logo   { animation: float 3.2s ease-in-out infinite, glow 2.5s ease-in-out infinite; }
 .splash-ring   { animation: splash-ring-out 1.8s ease-out infinite; }
@@ -114,4 +123,10 @@
 .player-bar {
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
+}
+
+/* Button press feedback */
+button:active:not(:disabled) {
+  transform: scale(0.93);
+  transition: transform 0.08s ease;
 }
