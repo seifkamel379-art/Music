@@ -1,5 +1,3 @@
-export const EXTERNAL_API = "https://youtube-stream-api--seifmusic7.replit.app";
-
 export type PipedTrack = {
   videoId: string;
   title: string;
@@ -11,7 +9,7 @@ export type PipedTrack = {
 
 export async function searchTracks(query: string): Promise<PipedTrack[]> {
   const res = await fetch(`/api/music/search?q=${encodeURIComponent(query)}`, {
-    signal: AbortSignal.timeout(20000),
+    signal: AbortSignal.timeout(25000),
   });
   if (!res.ok) throw new Error(`البحث فشل: ${res.status}`);
   const json = await res.json();
@@ -19,13 +17,13 @@ export async function searchTracks(query: string): Promise<PipedTrack[]> {
   return items.map((item: any) => ({
     videoId: item.videoId,
     title: item.title ?? "بدون عنوان",
-    artist: item.author ?? item.artist ?? "فنان غير معروف",
+    artist: item.artist ?? item.author ?? "فنان غير معروف",
     duration: item.duration ?? "0:00",
     thumbnail: item.thumbnail ?? null,
-    streamUrl: item.streamUrl ?? `${EXTERNAL_API}/api/proxy?id=${item.videoId}`,
+    streamUrl: item.streamUrl ?? `/api/music/stream?id=${item.videoId}`,
   }));
 }
 
 export function resolveStreamUrl(videoId: string): string {
-  return `${EXTERNAL_API}/api/proxy?id=${videoId}`;
+  return `/api/music/stream?id=${videoId}`;
 }

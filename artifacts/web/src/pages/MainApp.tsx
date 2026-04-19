@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { searchTracks as pipedSearch, EXTERNAL_API as API_BASE } from "@/lib/piped";
+import { searchTracks as pipedSearch } from "@/lib/piped";
 import { storage, type Track } from "@/lib/storage";
 import { useAudioPlayer } from "@/contexts/AudioPlayerContext";
 import { useTheme } from "@/contexts/ThemeContext";
