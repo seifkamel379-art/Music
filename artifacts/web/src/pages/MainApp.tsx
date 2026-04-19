@@ -22,12 +22,12 @@ function safeTitle(name: string) {
   return name.replace(/\.[^/.]+$/, "").slice(0, 60) || "أغنية";
 }
 
-const EXTERNAL_API = "https://youtube-stream-api--seifmusic7.replit.app";
+const STREAM_API = "https://music--seifmusic9.replit.app";
 
 async function downloadTrack(track: Track, setDownloading: React.Dispatch<React.SetStateAction<Set<string>>>) {
   setDownloading(prev => new Set([...prev, track.videoId]));
   try {
-    const downloadUrl = `${EXTERNAL_API}/api/proxy?id=${encodeURIComponent(track.videoId)}`;
+    const downloadUrl = `${STREAM_API}/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`;
     const res = await fetch(downloadUrl);
     if (!res.ok) throw new Error("fetch failed");
     const blob = await res.blob();
@@ -40,7 +40,7 @@ async function downloadTrack(track: Track, setDownloading: React.Dispatch<React.
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
   } catch {
-    window.open(`${EXTERNAL_API}/api/proxy?id=${encodeURIComponent(track.videoId)}`, "_blank", "noopener,noreferrer");
+    window.open(`${STREAM_API}/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`, "_blank", "noopener,noreferrer");
   } finally {
     setDownloading(prev => { const next = new Set(prev); next.delete(track.videoId); return next; });
   }
