@@ -3,7 +3,7 @@ import { z } from "zod/v4";
 
 const router: IRouter = Router();
 const PASSWORD = "16168080";
-const EXTERNAL_API = "https://youtube-stream-api--seifmusic.replit.app";
+const EXTERNAL_API = "https://youtube-stream-api--seifmusic7.replit.app";
 
 const loginSchema = z.object({
   name: z.string().trim().min(1),
