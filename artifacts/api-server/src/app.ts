@@ -39,7 +39,7 @@ app.use("/api", router);
 if (process.env.NODE_ENV === "production") {
   const webDist = path.resolve(__dirname, "../../web/dist/public");
   app.use(express.static(webDist));
-  app.get("*", (_req, res) => {
+  app.get(/(.*)/, (_req, res) => {
     res.sendFile(path.join(webDist, "index.html"));
   });
 }
