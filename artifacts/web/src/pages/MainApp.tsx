@@ -164,28 +164,15 @@ export default function MainApp({ userName, onLogout }: Props) {
 
   const isFav = useCallback((id: string) => favorites.some(t => t.videoId === id), [favorites]);
 
-  async function handleDownload(track: Track) {
-    if (downloadingIds.has(track.videoId)) return;
-    setDownloadingIds(p => new Set([...p, track.videoId]));
-    showToast("جارٍ تحضير ملف MP3...");
-    try {
-      const url = `/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`;
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const blob = await resp.blob();
-      const objUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = objUrl;
-      a.download = `${track.title}.mp3`;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => { URL.revokeObjectURL(objUrl); document.body.removeChild(a); }, 2000);
-      showToast("تم التحميل بنجاح ✓");
-    } catch {
-      showToast("فشل التحميل. تأكد من الاتصال وحاول مجدداً.");
-    } finally {
-      setDownloadingIds(p => { const n = new Set(p); n.delete(track.videoId); return n; });
-    }
+  function handleDownload(track: Track) {
+    const url = `/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${track.title}.mp3`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showToast("جارٍ تحضير التحميل...");
   }
 
   function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
@@ -561,6 +548,7 @@ function SkeletonCard({ colors }: { colors: any }) {
 /* ===================== SEARCH TAB ===================== */
 function SearchTab({ query, setQuery, results, loading, history, colors, themeMode, currentTrack, isFav, downloadingIds, onPlay, onFavorite, onPlaylist, onDownload, onHistoryClick, onClearHistory, onDeleteHistory, onCategoryClick }: any) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [historyOpen, setHistoryOpen] = useState(true);
   const searchBg = themeMode === "dark" ? "#fff" : colors.input;
   const searchTextColor = themeMode === "dark" ? "#121212" : colors.foreground;
 
@@ -593,11 +581,21 @@ function SearchTab({ query, setQuery, results, loading, history, colors, themeMo
       {/* History */}
       {!query && history.length > 0 && (
         <div style={{ padding: "0 16px", direction: "rtl" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <span style={{ color: colors.foreground, fontWeight: 700, fontSize: 16 }}>عمليات البحث الأخيرة</span>
-            <button onClick={onClearHistory} style={{ background: "none", border: "none", cursor: "pointer", color: colors.foreground, fontSize: 13 }}>مسح الكل</button>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: historyOpen ? 12 : 0 }}>
+            <button
+              onClick={() => setHistoryOpen(o => !o)}
+              style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, padding: 0 }}
+            >
+              <span style={{ color: colors.foreground, fontWeight: 700, fontSize: 16 }}>عمليات البحث الأخيرة</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={colors.mutedForeground} strokeWidth="2.5" style={{ transition: "transform 0.2s", transform: historyOpen ? "rotate(0deg)" : "rotate(-90deg)" }}>
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+            {historyOpen && (
+              <button onClick={onClearHistory} style={{ background: "none", border: "none", cursor: "pointer", color: colors.mutedForeground, fontSize: 13 }}>مسح الكل</button>
+            )}
           </div>
-          {history.map((h: string) => (
+          {historyOpen && history.map((h: string) => (
             <div key={h} style={{ display: "flex", alignItems: "center", gap: 10, borderBottom: `1px solid ${colors.border}`, direction: "rtl" }}>
               <div onClick={() => onHistoryClick(h)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", cursor: "pointer", flex: 1, minWidth: 0 }}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={colors.mutedForeground} strokeWidth="2" style={{ flexShrink: 0 }}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -606,7 +604,6 @@ function SearchTab({ query, setQuery, results, loading, history, colors, themeMo
               <button
                 onClick={e => { e.stopPropagation(); onDeleteHistory(h); }}
                 style={{ background: "none", border: "none", cursor: "pointer", padding: "6px", display: "flex", alignItems: "center", flexShrink: 0, opacity: 0.5 }}
-                title="حذف"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={colors.mutedForeground} strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
