@@ -57,19 +57,19 @@ This is a pnpm workspace monorepo. The active product is **Seif music**, a priva
 ## Replit Migration
 
 - The Replit development workflow is `Start application`.
-- It runs `scripts/start-replit-dev.sh`, which starts the API on port `8080` and the web app on port `3000`.
+- It runs `scripts/start-replit-dev.sh`, which starts the API on port `3001` and the web app on port `8080`.
 - The web app proxies `/api/*` to the local API server in development, keeping backend logic and private checks off the client.
-- The API requires the `PORT` environment variable and fails explicitly if it is missing or invalid.
+- The preview is served from the Vite web app on port `8080`; API health is available through the proxy at `/api/healthz`.
 
 ## Web App (React + Vite)
 
 - **Path**: `artifacts/web/`
-- **URL**: Preview at `/` (development workflow port `3000`; artifact metadata also supports port `22333`)
+- **URL**: Preview at `/` (development workflow port `8080`; artifact metadata also supports port `22333`)
 - **Stack**: React 19, Vite 7, TailwindCSS v4, TanStack Query
 - **Splash animation**: Logo + animated rings + wave bars on black background
 - **Features**: Login, Search, Library, Favorites, Audio Player with queue
 - **State**: All user data (playlist, favorites, history) stored in `localStorage`
-- **API proxy**: Vite dev server proxies `/api/*` → localhost:8080
+- **API proxy**: Vite dev server proxies `/api/*` → localhost:3001
 - **Vercel deploy**: `vercel.json` at root and `artifacts/web/vercel.json` both configure a Vercel-safe build
   - Build from repo root: `bash scripts/build-vercel-web.sh`
   - Build from `artifacts/web` root: `cd ../.. && bash scripts/build-vercel-web.sh`
