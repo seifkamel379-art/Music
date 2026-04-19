@@ -8,8 +8,16 @@ import MiniPlayer from "@/components/MiniPlayer";
 import PlayerModal from "@/components/PlayerModal";
 
 type Section = "home" | "search" | "playlist" | "favorites" | "device";
-
 type DeviceTrack = { id: string; title: string; artist: string; duration: string; url: string };
+
+const HOME_CATEGORIES = [
+  { label: "🔥 اتجاهات", query: "اغاني مصرية 2024" },
+  { label: "🎤 ويجز", query: "ويجز راب" },
+  { label: "🎵 عمرو دياب", query: "عمرو دياب" },
+  { label: "🎶 تامر حسني", query: "تامر حسني" },
+  { label: "✨ أم كلثوم", query: "أم كلثوم" },
+  { label: "🎸 راب مصري", query: "راب مصري جديد" },
+];
 
 const QUICK_SEARCHES = ["اغاني مصرية", "عمرو دياب", "ويجز", "تامر حسني", "أم كلثوم", "راب مصري"];
 
@@ -22,26 +30,19 @@ function safeTitle(name: string) {
   return name.replace(/\.[^/.]+$/, "").slice(0, 60) || "أغنية";
 }
 
-async function downloadTrack(track: Track, setDownloading: React.Dispatch<React.SetStateAction<Set<string>>>) {
+function downloadTrack(track: Track, setDownloading: React.Dispatch<React.SetStateAction<Set<string>>>) {
   setDownloading(prev => new Set([...prev, track.videoId]));
-  try {
-    const downloadUrl = `/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`;
-    const res = await fetch(downloadUrl);
-    if (!res.ok) throw new Error("fetch failed");
-    const blob = await res.blob();
-    const blobUrl = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = blobUrl;
-    a.download = `${track.title}.m4a`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
-  } catch {
-    window.open(`/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`, "_blank", "noopener,noreferrer");
-  } finally {
+  const url = `/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`;
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${track.title}.mp3`;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => {
     setDownloading(prev => { const next = new Set(prev); next.delete(track.videoId); return next; });
-  }
+  }, 4000);
 }
 
 function toTrack(t: { videoId: string; title: string; artist: string; duration: string; thumbnail?: string | null; streamUrl: string }): Track {
@@ -53,7 +54,7 @@ interface Props { userName: string; onLogout: () => void; }
 export default function MainApp({ userName, onLogout }: Props) {
   const { colors, themeMode, toggleTheme } = useTheme();
   const [section, setSection] = useState<Section>("home");
-  const [query, setQuery] = useState("اغاني مصرية");
+  const [query, setQuery] = useState("");
   const [playlist, setPlaylist] = useState<Track[]>(() => storage.getPlaylist());
   const [favorites, setFavorites] = useState<Track[]>(() => storage.getFavorites());
   const [history, setHistory] = useState<string[]>(() => storage.getHistory());
@@ -64,9 +65,40 @@ export default function MainApp({ userName, onLogout }: Props) {
   const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
   const [searchResults, setSearchResults] = useState<Track[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+
+  /* Home section */
+  const [homeCategoryIdx, setHomeCategoryIdx] = useState(0);
+  const [homeTracks, setHomeTracks] = useState<Track[]>([]);
+  const [homeLoading, setHomeLoading] = useState(false);
+  const loadedCats = useRef<Set<number>>(new Set());
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const { currentTrack, playTrack } = useAudioPlayer();
 
+  /* Load home suggestions on category change */
+  useEffect(() => {
+    if (loadedCats.current.has(homeCategoryIdx)) return;
+    loadedCats.current.add(homeCategoryIdx);
+    setHomeLoading(true);
+    setHomeTracks([]);
+    pipedSearch(HOME_CATEGORIES[homeCategoryIdx].query)
+      .then(tracks => setHomeTracks(tracks as Track[]))
+      .catch(() => {})
+      .finally(() => setHomeLoading(false));
+  }, [homeCategoryIdx]);
+
+  /* Pre-load first category on mount */
+  useEffect(() => {
+    loadedCats.current.add(0);
+    setHomeLoading(true);
+    pipedSearch(HOME_CATEGORIES[0].query)
+      .then(tracks => setHomeTracks(tracks as Track[]))
+      .catch(() => {})
+      .finally(() => setHomeLoading(false));
+  }, []);
+
+  /* Search debounce */
   useEffect(() => {
     if (query.trim().length <= 1) { setSearchResults([]); return; }
     setSearchLoading(true);
@@ -78,9 +110,6 @@ export default function MainApp({ userName, onLogout }: Props) {
     }, 600);
     return () => clearTimeout(timer);
   }, [query]);
-
-  const searchTracks: Track[] = searchResults;
-  const featured = useMemo(() => (playlist.length > 0 ? playlist.slice(0, 6) : searchTracks.slice(0, 6)), [playlist, searchTracks]);
 
   const addHistory = useCallback((q: string) => {
     setHistory(prev => { const next = [q, ...prev.filter(x => x !== q)].slice(0, 10); storage.setHistory(next); return next; });
@@ -106,14 +135,13 @@ export default function MainApp({ userName, onLogout }: Props) {
   const listData = useMemo<Track[]>(() => {
     if (section === "favorites") return favorites;
     if (section === "playlist") return playlist;
-    return searchTracks;
-  }, [section, favorites, playlist, searchTracks]);
+    if (section === "search") return searchResults;
+    return [];
+  }, [section, favorites, playlist, searchResults]);
 
-  /* ===== جهازي: قراءة ملفات الصوت من الجهاز ===== */
   function handleDeviceSection() {
     setSection("device");
     if (deviceTracks.length > 0) return;
-    /* Try File System Access API first, fallback to <input file> */
     loadDeviceFiles();
   }
 
@@ -121,7 +149,6 @@ export default function MainApp({ userName, onLogout }: Props) {
     setDeviceLoading(true);
     setDeviceError(null);
     try {
-      /* Modern File System Access API */
       if ("showOpenFilePicker" in window) {
         const files: File[] = [];
         try {
@@ -139,7 +166,6 @@ export default function MainApp({ userName, onLogout }: Props) {
           if (err?.name !== "AbortError") throw err;
         }
       } else {
-        /* Fallback: trigger hidden file input */
         fileInputRef.current?.click();
       }
     } catch {
@@ -156,7 +182,6 @@ export default function MainApp({ userName, onLogout }: Props) {
       artist: "جهازك", duration: "",
       url: URL.createObjectURL(f),
     })));
-    /* Reset input so same files can be re-selected */
     e.target.value = "";
   }
 
@@ -169,13 +194,11 @@ export default function MainApp({ userName, onLogout }: Props) {
   const hasPlayer = !!currentTrack;
   const C = colors;
 
-  /* Shared styles */
   const sectionTitle = { fontSize: 20, fontWeight: 700, color: C.foreground, marginInline: 18, marginTop: 20, marginBottom: 10, direction: "rtl" } as const;
 
   return (
     <div style={{ minHeight: "100dvh", background: C.background, overflowY: "auto", paddingBottom: hasPlayer ? 158 : 76 }}>
 
-      {/* Hidden file input for fallback */}
       <input ref={fileInputRef} type="file" accept="audio/*" multiple style={{ display: "none" }} onChange={handleFileInput} />
 
       {/* ===== HEADER ===== */}
@@ -198,42 +221,48 @@ export default function MainApp({ userName, onLogout }: Props) {
         </div>
       </div>
 
-      {/* ===== HERO ===== */}
-      <div style={{ marginInline: 18, borderRadius: 22, padding: 18, minHeight: 140, background: C.espresso, border: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", direction: "rtl" }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ color: C.gold, fontSize: 13, fontWeight: 700 }}>موسيقاك الخاصة</div>
-          <div style={{ color: "#fff", fontSize: 27, fontWeight: 700, marginTop: 6, letterSpacing: -0.6 }}>{playlist.length} أغنية في مكتبتك</div>
-          <div style={{ color: "rgba(255,255,255,0.72)", fontSize: 13, lineHeight: "19px", marginTop: 8, fontWeight: 500 }}>بحث سريع · تشغيل فوري · تحميل كامل</div>
-        </div>
-        <div style={{ width: 128, display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
-          <div style={{ width: 92, height: 92, borderRadius: 46, border: `2px solid ${C.gold}`, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.06)" }}>
-            <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke={C.gold} strokeWidth="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+      {/* ===== HERO (home only) ===== */}
+      {section === "home" && (
+        <div style={{ marginInline: 18, borderRadius: 22, padding: 18, minHeight: 140, background: C.espresso, border: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", direction: "rtl" }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ color: C.gold, fontSize: 13, fontWeight: 700 }}>موسيقاك الخاصة</div>
+            <div style={{ color: "#fff", fontSize: 27, fontWeight: 700, marginTop: 6, letterSpacing: -0.6 }}>{playlist.length} أغنية في مكتبتك</div>
+            <div style={{ color: "rgba(255,255,255,0.72)", fontSize: 13, lineHeight: "19px", marginTop: 8, fontWeight: 500 }}>بحث سريع · تشغيل فوري · تحميل كامل</div>
           </div>
-          {[72, 48, 32].map((h, i) => (
-            <div key={i} className="wave-bar" style={{ width: 7, height: h, borderRadius: 999, background: C.gold, opacity: 0.85, animationDelay: `${i * 0.12}s` }} />
-          ))}
+          <div style={{ width: 128, display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
+            <div style={{ width: 92, height: 92, borderRadius: 46, border: `2px solid ${C.gold}`, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.06)" }}>
+              <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke={C.gold} strokeWidth="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+            </div>
+            {[72, 48, 32].map((h, i) => (
+              <div key={i} className="wave-bar" style={{ width: 7, height: h, borderRadius: 999, background: C.gold, opacity: 0.85, animationDelay: `${i * 0.12}s` }} />
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* ===== SEARCH ===== */}
-      <div style={{ marginInline: 18, marginTop: 16, height: 54, borderRadius: 22, border: `1px solid ${C.border}`, paddingInline: 16, display: "flex", alignItems: "center", gap: 10, background: C.card, direction: "rtl" }}>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.primary} strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input
-          type="text" value={query}
-          onChange={e => { setQuery(e.target.value); if (e.target.value.trim().length > 1) setSection("search"); }}
-          onKeyDown={e => { if (e.key === "Enter" && query.trim().length > 1) { addHistory(query.trim()); setSection("search"); } }}
-          placeholder="ابحث عن أي أغنية"
-          style={{ flex: 1, height: 52, fontSize: 16, fontWeight: 600, background: "transparent", border: "none", outline: "none", color: C.foreground, fontFamily: "inherit", textAlign: "right", direction: "rtl" }}
-        />
-        {query && (
-          <button onClick={() => setQuery("")} style={{ background: "none", border: "none", cursor: "pointer", color: C.mutedForeground, display: "flex" }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
-        )}
-      </div>
+      {/* ===== SEARCH BAR (search section only) ===== */}
+      {section === "search" && (
+        <div style={{ marginInline: 18, marginTop: 16, height: 54, borderRadius: 22, border: `1px solid ${C.border}`, paddingInline: 16, display: "flex", alignItems: "center", gap: 10, background: C.card, direction: "rtl" }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.primary} strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input
+            ref={searchInputRef}
+            type="text" value={query}
+            onChange={e => setQuery(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter" && query.trim().length > 1) addHistory(query.trim()); }}
+            placeholder="ابحث عن أي أغنية أو فنان"
+            autoFocus
+            style={{ flex: 1, height: 52, fontSize: 16, fontWeight: 600, background: "transparent", border: "none", outline: "none", color: C.foreground, fontFamily: "inherit", textAlign: "right", direction: "rtl" }}
+          />
+          {query && (
+            <button onClick={() => setQuery("")} style={{ background: "none", border: "none", cursor: "pointer", color: C.mutedForeground, display: "flex" }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          )}
+        </div>
+      )}
 
-      {/* ===== HISTORY CHIPS ===== */}
-      {history.length > 0 && section !== "device" && (
+      {/* ===== HISTORY CHIPS (search only) ===== */}
+      {section === "search" && history.length > 0 && (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingInline: 20, paddingTop: 10, paddingBottom: 2, direction: "rtl" }}>
             <span style={{ color: C.mutedForeground, fontWeight: 700, fontSize: 12 }}>بحث سابق</span>
@@ -241,7 +270,7 @@ export default function MainApp({ userName, onLogout }: Props) {
           </div>
           <div style={{ display: "flex", overflowX: "auto", gap: 8, paddingInline: 18, paddingBlock: 8, scrollbarWidth: "none" }}>
             {history.map(h => (
-              <Chip key={h} onClick={() => { setQuery(h); setSection("search"); }} active={false} C={C}>
+              <Chip key={h} onClick={() => setQuery(h)} active={false} C={C}>
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={C.mutedForeground} strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                 {h}
               </Chip>
@@ -250,25 +279,59 @@ export default function MainApp({ userName, onLogout }: Props) {
         </>
       )}
 
-      {/* ===== QUICK SEARCHES ===== */}
-      <div style={{ display: "flex", overflowX: "auto", gap: 8, paddingInline: 18, paddingBlock: 8, scrollbarWidth: "none" }}>
-        {QUICK_SEARCHES.map(q2 => (
-          <Chip key={q2} onClick={() => { setQuery(q2); setSection("search"); addHistory(q2); }} active={query === q2} C={C}>{q2}</Chip>
-        ))}
-      </div>
+      {/* ===== QUICK SEARCHES (search only) ===== */}
+      {section === "search" && (
+        <div style={{ display: "flex", overflowX: "auto", gap: 8, paddingInline: 18, paddingBlock: 8, scrollbarWidth: "none" }}>
+          {QUICK_SEARCHES.map(q2 => (
+            <Chip key={q2} onClick={() => { setQuery(q2); addHistory(q2); }} active={query === q2} C={C}>{q2}</Chip>
+          ))}
+        </div>
+      )}
 
-      {/* ===== FEATURED (home only) ===== */}
-      {section === "home" && featured.length > 0 && (
+      {/* ===== HOME SUGGESTIONS ===== */}
+      {section === "home" && (
         <>
-          <div style={sectionTitle}>مختارات</div>
-          <div style={{ display: "flex", overflowX: "auto", gap: 12, paddingInline: 18, paddingBottom: 8, scrollbarWidth: "none" }}>
-            {featured.map((t, i) => <FeaturedCard key={t.videoId} track={t} index={i} onPlay={() => playTrack(t, featured)} C={C} />)}
+          {/* Category chips */}
+          <div style={{ display: "flex", overflowX: "auto", gap: 8, paddingInline: 18, paddingBlock: 12, scrollbarWidth: "none" }}>
+            {HOME_CATEGORIES.map((cat, idx) => (
+              <Chip key={cat.query} onClick={() => setHomeCategoryIdx(idx)} active={homeCategoryIdx === idx} C={C}>
+                {cat.label}
+              </Chip>
+            ))}
           </div>
-          <div style={sectionTitle}>نتائج البحث</div>
+
+          <div style={sectionTitle}>اقتراحات لك</div>
+
+          {homeLoading && (
+            <div style={{ display: "flex", justifyContent: "center", alignItems: "flex-end", gap: 5, padding: "20px 0" }}>
+              {[0,1,2,3,4].map(i => <div key={i} className="wave-bar" style={{ width: 5, height: 24, background: C.primary, borderRadius: 999, animationDelay: `${i*0.1}s` }} />)}
+            </div>
+          )}
+
+          {!homeLoading && homeTracks.length === 0 && (
+            <div style={{ margin: 18, borderRadius: 22, border: `1px solid ${C.border}`, padding: 24, background: C.card, textAlign: "center", direction: "rtl" }}>
+              <div style={{ fontSize: 15, color: C.mutedForeground }}>جاري تحميل الاقتراحات...</div>
+            </div>
+          )}
+
+          {homeTracks.map((track, i) => (
+            <TrackRow
+              key={track.videoId} track={track} index={i}
+              isCurrent={currentTrack?.videoId === track.videoId}
+              isPlaying={currentTrack?.videoId === track.videoId}
+              isFavorite={isFav(track.videoId)}
+              isDownloading={downloadingIds.has(track.videoId)}
+              onPlay={() => playTrack(track, homeTracks)}
+              onFavorite={() => toggleFavorite(track)}
+              onPlaylist={() => addToPlaylist(track)}
+              onDownload={() => downloadTrack(track, setDownloadingIds)}
+              C={C}
+            />
+          ))}
         </>
       )}
 
-      {/* ===== SECTION HEADER (non-home, non-device) ===== */}
+      {/* ===== NON-HOME SECTION HEADER ===== */}
       {section !== "home" && section !== "device" && (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingInlineEnd: 18, direction: "rtl" }}>
           <div style={sectionTitle}>
@@ -315,7 +378,7 @@ export default function MainApp({ userName, onLogout }: Props) {
               </button>
             </div>
           )}
-          {deviceTracks.map((dt, i) => (
+          {deviceTracks.map((dt) => (
             <div key={dt.id} onClick={() => playDeviceTrack(dt)} style={{
               display: "flex", alignItems: "center", gap: 10,
               margin: "0 18px 8px", border: `1px solid ${currentTrack?.videoId === dt.id ? C.primary : C.border}`,
@@ -329,38 +392,37 @@ export default function MainApp({ userName, onLogout }: Props) {
                 <div style={{ color: C.foreground, fontSize: 14, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dt.title}</div>
                 <div style={{ color: C.mutedForeground, fontSize: 12, fontWeight: 500, marginTop: 3 }}>{dt.artist}</div>
               </div>
-              {currentTrack?.videoId === dt.id ? (
-                <svg width="32" height="32" viewBox="0 0 24 24" fill={C.primary}><circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="2" height="6" rx="1" fill={C.primaryForeground}/><rect x="13" y="9" width="2" height="6" rx="1" fill={C.primaryForeground}/></svg>
-              ) : (
-                <svg width="32" height="32" viewBox="0 0 24 24" fill={C.mutedForeground}><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill={C.primaryForeground}/></svg>
-              )}
+              {currentTrack?.videoId === dt.id
+                ? <svg width="32" height="32" viewBox="0 0 24 24" fill={C.primary}><circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="2" height="6" rx="1" fill={C.primaryForeground}/><rect x="13" y="9" width="2" height="6" rx="1" fill={C.primaryForeground}/></svg>
+                : <svg width="32" height="32" viewBox="0 0 24 24" fill={C.mutedForeground}><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill={C.primaryForeground}/></svg>
+              }
             </div>
           ))}
         </>
       )}
 
-      {/* ===== LOADING ===== */}
-      {searchLoading && (section === "search" || section === "home") && (
+      {/* ===== LOADING (search) ===== */}
+      {searchLoading && section === "search" && (
         <div style={{ display: "flex", justifyContent: "center", alignItems: "flex-end", gap: 5, padding: "20px 0" }}>
           {[0,1,2,3,4].map(i => <div key={i} className="wave-bar" style={{ width: 5, height: 24, background: C.primary, borderRadius: 999, animationDelay: `${i*0.1}s` }} />)}
         </div>
       )}
 
-      {/* ===== EMPTY ===== */}
-      {section !== "device" && listData.length === 0 && !searchLoading && (
+      {/* ===== EMPTY (non-home, non-device) ===== */}
+      {section !== "home" && section !== "device" && listData.length === 0 && !searchLoading && (
         <div style={{ margin: 18, borderRadius: 22, border: `1px solid ${C.border}`, padding: 24, background: C.card, display: "flex", flexDirection: "column", alignItems: "center", direction: "rtl" }}>
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={C.primary} strokeWidth="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
           <div style={{ marginTop: 10, fontSize: 17, fontWeight: 700, color: C.foreground }}>
             {section === "favorites" ? "لسه مفيش مفضلة" : section === "playlist" ? "القائمة فاضية" : "ابدأ البحث"}
           </div>
           <div style={{ marginTop: 6, textAlign: "center", lineHeight: "20px", fontWeight: 500, color: C.mutedForeground, fontSize: 14 }}>
-            {section === "playlist" || section === "favorites" ? "دور على الأغاني وضيفها للقائمة أو المفضلة" : "اكتب اسم الأغنية أو الفنان"}
+            {section === "playlist" || section === "favorites" ? "دور على الأغاني وضيفها للقائمة أو المفضلة" : "اكتب اسم الأغنية أو الفنان في شريط البحث"}
           </div>
         </div>
       )}
 
-      {/* ===== TRACK LIST ===== */}
-      {section !== "device" && listData.map((track, i) => (
+      {/* ===== TRACK LIST (non-home, non-device) ===== */}
+      {section !== "home" && section !== "device" && listData.map((track, i) => (
         <TrackRow
           key={track.videoId} track={track} index={i}
           isCurrent={currentTrack?.videoId === track.videoId}
@@ -428,27 +490,9 @@ function Chip({ onClick, active, C, children }: { onClick: () => void; active: b
   );
 }
 
-function FeaturedCard({ track, index, onPlay, C }: { track: Track; index: number; onPlay: () => void; C: any }) {
-  const [imgErr, setImgErr] = useState(false);
-  const COVERS = ["/cover-one.png", "/cover-two.png", "/cover-three.png"];
-  return (
-    <button onClick={onPlay} style={{ width: 140, borderRadius: 22, padding: 10, background: C.card, border: "none", cursor: "pointer", flexShrink: 0, textAlign: "right", direction: "rtl" }}>
-      <div style={{ width: "100%", height: 120, borderRadius: 16, marginBottom: 8, overflow: "hidden" }}>
-        {track.thumbnail && !imgErr
-          ? <img src={track.thumbnail} onError={() => setImgErr(true)} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-          : <img src={COVERS[index % 3]} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-        }
-      </div>
-      <div style={{ fontSize: 13, lineHeight: "17px", fontWeight: 700, color: C.foreground, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{track.title}</div>
-      <div style={{ fontSize: 11, fontWeight: 500, marginTop: 3, color: C.mutedForeground, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{track.artist}</div>
-    </button>
-  );
-}
-
 /* Icons */
 function HomeIcon() { return <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>; }
 function SearchIcon() { return <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>; }
 function ListIcon() { return <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>; }
 function HeartIcon() { return <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>; }
 function PhoneIcon() { return <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>; }
-

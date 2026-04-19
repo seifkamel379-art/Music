@@ -1,10 +1,14 @@
 import express, { type Express } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
+import path from "path";
+import { fileURLToPath } from "url";
 import router from "./routes";
 import { logger } from "./lib/logger";
 
 const app: Express = express();
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 app.use(
   pinoHttp({
@@ -30,5 +34,14 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
+
+/* Serve web app static files in production */
+if (process.env.NODE_ENV === "production") {
+  const webDist = path.resolve(__dirname, "../../web/dist/public");
+  app.use(express.static(webDist));
+  app.get("*", (_req, res) => {
+    res.sendFile(path.join(webDist, "index.html"));
+  });
+}
 
 export default app;

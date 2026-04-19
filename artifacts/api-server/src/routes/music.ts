@@ -59,94 +59,55 @@ router.get("/music/search", async (req: Request, res: Response, next: NextFuncti
   }
 });
 
-async function getAudioUrl(videoId: string): Promise<string> {
-  const { stdout } = await execFileAsync("yt-dlp", [
-    "-f", "bestaudio",
-    "--get-url",
+function pipeYtdlpMp3(videoId: string, req: Request, res: Response, next: NextFunction) {
+  const ytdlp = spawn("yt-dlp", [
+    "-x",
+    "--audio-format", "mp3",
+    "--audio-quality", "5",
+    "-o", "-",
     "--no-warnings",
+    "--no-playlist",
     `https://youtube.com/watch?v=${videoId}`,
-  ], { timeout: 30000 });
-  const url = stdout.trim().split("\n")[0];
-  if (!url) throw new Error("No audio URL found");
-  return url;
+  ]);
+
+  ytdlp.stdout.pipe(res);
+  ytdlp.stderr.on("data", () => {});
+  req.on("close", () => { try { ytdlp.kill("SIGKILL"); } catch {} });
+  ytdlp.on("close", () => { if (!res.writableEnded) res.end(); });
+  ytdlp.on("error", (err) => {
+    if (!res.headersSent) next(err);
+    else if (!res.writableEnded) res.end();
+  });
 }
 
-function streamAudioViaFfmpeg(audioUrl: string, res: Response, req: Request, next: NextFunction) {
-  const ffmpeg = spawn("ffmpeg", [
-    "-i", audioUrl,
-    "-vn",
-    "-acodec", "libmp3lame",
-    "-ab", "128k",
-    "-f", "mp3",
-    "-",
-  ]);
+router.get("/music/stream", (req: Request, res: Response, next: NextFunction) => {
+  const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
+  if (!id) { res.status(400).json({ message: "Missing id" }); return; }
 
   res.setHeader("Content-Type", "audio/mpeg");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Transfer-Encoding", "chunked");
 
-  ffmpeg.stdout.pipe(res);
-  ffmpeg.stderr.on("data", () => {});
-  req.on("close", () => { try { ffmpeg.kill(); } catch {} });
-  ffmpeg.on("close", () => { if (!res.writableEnded) res.end(); });
-  ffmpeg.on("error", (err) => {
-    if (!res.headersSent) next(err);
-    else if (!res.writableEnded) res.end();
-  });
-}
-
-router.get("/music/stream", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
-    if (!id) { res.status(400).json({ message: "Missing id" }); return; }
-
-    const audioUrl = await getAudioUrl(id);
-    streamAudioViaFfmpeg(audioUrl, res, req, next);
-  } catch (error) {
-    next(error);
-  }
+  pipeYtdlpMp3(id, req, res, next);
 });
 
-router.get("/music/download", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
-    const rawTitle = typeof req.query.title === "string" ? req.query.title.trim() : "track";
-    if (!id) { res.status(400).json({ message: "Missing id" }); return; }
+router.get("/music/download", (req: Request, res: Response, next: NextFunction) => {
+  const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
+  const rawTitle = typeof req.query.title === "string" ? req.query.title.trim() : "track";
+  if (!id) { res.status(400).json({ message: "Missing id" }); return; }
 
-    const safeTitle = rawTitle
-      .replace(/[^\w\u0600-\u06FF\s\-().]/g, "")
-      .trim().replace(/\s+/g, "_").slice(0, 120) || `track-${id}`;
+  const safeTitle = rawTitle
+    .replace(/[^\w\u0600-\u06FF\s\-().]/g, "")
+    .trim().replace(/\s+/g, "_").slice(0, 120) || `track-${id}`;
 
-    const audioUrl = await getAudioUrl(id);
+  res.setHeader("Content-Type", "audio/mpeg");
+  res.setHeader("Content-Disposition", `attachment; filename="track-${id}.mp3"; filename*=UTF-8''${encodeURIComponent(safeTitle + ".mp3")}`);
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Transfer-Encoding", "chunked");
 
-    res.setHeader("Content-Type", "audio/mpeg");
-    res.setHeader("Content-Disposition", `attachment; filename="track-${id}.mp3"; filename*=UTF-8''${encodeURIComponent(safeTitle + ".mp3")}`);
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Transfer-Encoding", "chunked");
-
-    const ffmpeg = spawn("ffmpeg", [
-      "-i", audioUrl,
-      "-vn",
-      "-acodec", "libmp3lame",
-      "-ab", "128k",
-      "-f", "mp3",
-      "-",
-    ]);
-
-    ffmpeg.stdout.pipe(res);
-    ffmpeg.stderr.on("data", () => {});
-    req.on("close", () => { try { ffmpeg.kill(); } catch {} });
-    ffmpeg.on("close", () => { if (!res.writableEnded) res.end(); });
-    ffmpeg.on("error", (err) => {
-      if (!res.headersSent) next(err);
-      else if (!res.writableEnded) res.end();
-    });
-  } catch (error) {
-    if (!res.headersSent) next(error);
-    else if (!res.writableEnded) res.end();
-  }
+  pipeYtdlpMp3(id, req, res, next);
 });
 
 export default router;
