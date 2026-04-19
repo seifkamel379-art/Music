@@ -160,20 +160,21 @@ export default function MainApp({ userName, onLogout }: Props) {
     showToast("جارٍ تحضير ملف MP3...");
     try {
       const url = `/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`;
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const blob = await resp.blob();
-      const objUrl = URL.createObjectURL(blob);
+      /* Use direct anchor download — works reliably in Chrome & PWA apps */
       const a = document.createElement("a");
-      a.href = objUrl;
+      a.href = url;
       a.download = `${track.title}.mp3`;
+      a.target = "_self";
       document.body.appendChild(a);
       a.click();
-      setTimeout(() => { URL.revokeObjectURL(objUrl); document.body.removeChild(a); }, 2000);
-      showToast("تم التحميل بنجاح");
+      document.body.removeChild(a);
+      /* Wait a moment then clear loading state */
+      setTimeout(() => {
+        setDownloadingIds(p => { const n = new Set(p); n.delete(track.videoId); return n; });
+        showToast("بدأ التحميل تلقائياً ✓");
+      }, 1500);
     } catch {
       showToast("فشل التحميل. تأكد من الاتصال وحاول مجدداً.");
-    } finally {
       setDownloadingIds(p => { const n = new Set(p); n.delete(track.videoId); return n; });
     }
   }

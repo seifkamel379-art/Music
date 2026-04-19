@@ -61,7 +61,19 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     audio.preload = "auto";
     audioRef.current = audio;
 
-    const onTime = () => setStatus(s => ({ ...s, currentTime: audio.currentTime }));
+    const onTime = () => {
+      setStatus(s => ({ ...s, currentTime: audio.currentTime }));
+      /* Keep lock-screen progress bar in sync */
+      if ("mediaSession" in navigator && isFinite(audio.duration) && audio.duration > 0) {
+        try {
+          navigator.mediaSession.setPositionState?.({
+            duration: audio.duration,
+            playbackRate: audio.playbackRate,
+            position: audio.currentTime,
+          });
+        } catch {}
+      }
+    };
     const onDur = () => setStatus(s => ({ ...s, duration: isFinite(audio.duration) ? audio.duration : 0 }));
     const onPlay = () => {
       setStatus(s => ({ ...s, playing: true, isBuffering: false }));
