@@ -30,6 +30,27 @@ type AudioPlayerCtx = {
 
 const Ctx = createContext<AudioPlayerCtx | null>(null);
 
+/* Cache resolved YouTube CDN URLs so we don't call yt-dlp repeatedly */
+const resolveCache = new Map<string, { url: string; time: number }>();
+const RESOLVE_TTL = 25 * 60 * 1000; // 25 minutes
+
+async function resolveDirectUrl(videoId: string): Promise<string | null> {
+  const cached = resolveCache.get(videoId);
+  if (cached && Date.now() - cached.time < RESOLVE_TTL) return cached.url;
+  try {
+    const res = await fetch(`/api/music/resolve?id=${encodeURIComponent(videoId)}`, {
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.url) {
+      resolveCache.set(videoId, { url: data.url, time: Date.now() });
+      return data.url;
+    }
+  } catch {}
+  return null;
+}
+
 function updateMediaSession(track: Track | null, playing: boolean) {
   if (!("mediaSession" in navigator)) return;
   if (!track) { navigator.mediaSession.metadata = null; return; }
@@ -63,7 +84,6 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
 
     const onTime = () => {
       setStatus(s => ({ ...s, currentTime: audio.currentTime }));
-      /* Keep lock-screen progress bar in sync */
       if ("mediaSession" in navigator && isFinite(audio.duration) && audio.duration > 0) {
         try {
           navigator.mediaSession.setPositionState?.({
@@ -134,13 +154,25 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     };
   }, []);
 
-  function loadAndPlay(track: Track) {
+  async function loadAndPlay(track: Track) {
     const audio = audioRef.current;
     if (!audio) return;
     setCurrentTrack(track);
     setStatus({ playing: false, currentTime: 0, duration: 0, isBuffering: true });
     updateMediaSession(track, false);
-    audio.src = track.streamUrl;
+
+    /* Try to resolve a direct YouTube CDN URL (bypasses server streaming) */
+    let src = track.streamUrl;
+    try {
+      const videoId = track.videoId ||
+        new URL(track.streamUrl, "https://x").searchParams.get("id") || "";
+      if (videoId && !videoId.startsWith("device-")) {
+        const direct = await resolveDirectUrl(videoId);
+        if (direct) src = direct;
+      }
+    } catch {}
+
+    audio.src = src;
     audio.load();
     audio.play().catch(() => {});
   }

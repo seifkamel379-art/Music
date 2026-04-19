@@ -100,14 +100,24 @@ export default function MainApp({ userName, onLogout }: Props) {
   }, []);
 
   useEffect(() => {
-    if (query.trim().length < 2) { setSearchResults([]); return; }
+    const q = query.trim();
+    if (q.length < 2) { setSearchResults([]); return; }
     setSearchLoading(true);
     const t = setTimeout(() => {
-      apiSearch(query.trim())
-        .then(r => setSearchResults(r as Track[]))
+      apiSearch(q)
+        .then(r => {
+          setSearchResults(r as Track[]);
+          if (r.length > 0) {
+            setHistory(prev => {
+              const next = [q, ...prev.filter(x => x !== q)].slice(0, 20);
+              storage.setHistory(next);
+              return next;
+            });
+          }
+        })
         .catch(() => setSearchResults([]))
         .finally(() => setSearchLoading(false));
-    }, 500);
+    }, 600);
     return () => clearTimeout(t);
   }, [query]);
 
@@ -197,10 +207,18 @@ export default function MainApp({ userName, onLogout }: Props) {
     playTrack(t, all);
   }
 
+  const deleteFromHistory = useCallback((q: string) => {
+    setHistory(prev => {
+      const next = prev.filter(x => x !== q);
+      storage.setHistory(next);
+      return next;
+    });
+  }, []);
+
   function searchCategory(q: string) {
     setTab("search");
     setQuery(q);
-    const h = [q, ...history.filter(x => x !== q)].slice(0, 10);
+    const h = [q, ...history.filter(x => x !== q)].slice(0, 20);
     setHistory(h); storage.setHistory(h);
   }
 
@@ -280,6 +298,7 @@ export default function MainApp({ userName, onLogout }: Props) {
             onDownload={handleDownload}
             onHistoryClick={(q: string) => { setQuery(q); }}
             onClearHistory={() => { setHistory([]); storage.setHistory([]); }}
+            onDeleteHistory={deleteFromHistory}
             onCategoryClick={searchCategory}
           />
         )}
@@ -540,7 +559,7 @@ function SkeletonCard({ colors }: { colors: any }) {
 }
 
 /* ===================== SEARCH TAB ===================== */
-function SearchTab({ query, setQuery, results, loading, history, colors, themeMode, currentTrack, isFav, downloadingIds, onPlay, onFavorite, onPlaylist, onDownload, onHistoryClick, onClearHistory, onCategoryClick }: any) {
+function SearchTab({ query, setQuery, results, loading, history, colors, themeMode, currentTrack, isFav, downloadingIds, onPlay, onFavorite, onPlaylist, onDownload, onHistoryClick, onClearHistory, onDeleteHistory, onCategoryClick }: any) {
   const inputRef = useRef<HTMLInputElement>(null);
   const searchBg = themeMode === "dark" ? "#fff" : colors.input;
   const searchTextColor = themeMode === "dark" ? "#121212" : colors.foreground;
@@ -579,9 +598,18 @@ function SearchTab({ query, setQuery, results, loading, history, colors, themeMo
             <button onClick={onClearHistory} style={{ background: "none", border: "none", cursor: "pointer", color: colors.foreground, fontSize: 13 }}>مسح الكل</button>
           </div>
           {history.map((h: string) => (
-            <div key={h} onClick={() => onHistoryClick(h)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", cursor: "pointer", borderBottom: `1px solid ${colors.border}`, direction: "rtl" }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={colors.mutedForeground} strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-              <span style={{ color: colors.foreground, fontSize: 14, flex: 1 }}>{h}</span>
+            <div key={h} style={{ display: "flex", alignItems: "center", gap: 10, borderBottom: `1px solid ${colors.border}`, direction: "rtl" }}>
+              <div onClick={() => onHistoryClick(h)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", cursor: "pointer", flex: 1, minWidth: 0 }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={colors.mutedForeground} strokeWidth="2" style={{ flexShrink: 0 }}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <span style={{ color: colors.foreground, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h}</span>
+              </div>
+              <button
+                onClick={e => { e.stopPropagation(); onDeleteHistory(h); }}
+                style={{ background: "none", border: "none", cursor: "pointer", padding: "6px", display: "flex", alignItems: "center", flexShrink: 0, opacity: 0.5 }}
+                title="حذف"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={colors.mutedForeground} strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
             </div>
           ))}
         </div>
