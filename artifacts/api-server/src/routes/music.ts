@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod/v4";
-import { spawn, execFile } from "child_process";
+import { spawn, execFile, type ChildProcessWithoutNullStreams } from "child_process";
 import { promisify } from "util";
 import type { Request, Response, NextFunction } from "express";
 
@@ -73,53 +73,71 @@ router.get("/music/search", async (req: Request, res: Response, next: NextFuncti
   } catch (e) { next(e); }
 });
 
-/* ── Helper: resolve direct YouTube audio URL via yt-dlp -g ─────────────── */
-async function resolveAudioUrl(videoId: string): Promise<string> {
-  const { stdout } = await execFileAsync("yt-dlp", [
-    "-g", "--format", "bestaudio", ...BASE, "--no-playlist",
+function createYtDlpAudioProcess(videoId: string): ChildProcessWithoutNullStreams {
+  return spawn("yt-dlp", [
+    "-f", "bestaudio",
+    "-o", "-",
+    ...BASE,
+    "--no-playlist",
     `https://www.youtube.com/watch?v=${videoId}`,
-  ], { timeout: 18000 });
-  const url = stdout.trim().split("\n")[0];
-  if (!url) throw new Error("empty URL from yt-dlp -g");
-  return url;
+  ], { stdio: ["pipe", "pipe", "pipe"] });
 }
 
-/* ── Stream ─────────────────────────────────────────────────────────────────
-   1. yt-dlp -g  → direct YouTube CDN URL  (~3s)
-   2. ffmpeg -reconnect → converts to mp3 stream
-   ffmpeg reconnects if the CDN drops mid-stream — much more reliable than
-   letting yt-dlp handle the whole download + transcode.
-   ─────────────────────────────────────────────────────────────────────────── */
+function streamMp3(req: Request, res: Response, videoId: string, bitrate: "128k" | "192k", onHeaders: () => void, next: NextFunction) {
+  const ytdlp = createYtDlpAudioProcess(videoId);
+  const ff = spawn("ffmpeg", [
+    "-i", "pipe:0",
+    "-vn", "-ar", "44100", "-ac", "2", "-b:a", bitrate,
+    "-f", "mp3", "-",
+  ], { stdio: ["pipe", "pipe", "pipe"] });
+
+  ytdlp.stdout.pipe(ff.stdin);
+  ytdlp.stderr.on("data", () => {});
+  ff.stderr.on("data", () => {});
+  ytdlp.on("error", e => { if (!res.headersSent) next(e); else if (!res.writableEnded) res.end(); });
+  ff.on("error", e => { if (!res.headersSent) next(e); else if (!res.writableEnded) res.end(); });
+  ff.stdin.on("error", () => {});
+
+  let sentAudio = false;
+  let closed = false;
+
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    try { ytdlp.kill("SIGKILL"); } catch {}
+    try { ff.kill("SIGKILL"); } catch {}
+  };
+
+  req.on("close", cleanup);
+  ff.stdout.on("data", chunk => {
+    if (!sentAudio) {
+      sentAudio = true;
+      onHeaders();
+    }
+    res.write(chunk);
+  });
+  ff.stdout.on("end", () => {
+    if (!res.writableEnded) res.end();
+  });
+  ff.on("close", () => {
+    if (!sentAudio && !res.headersSent) {
+      res.status(502).json({ message: "Audio conversion failed" });
+      return;
+    }
+    if (!res.writableEnded) res.end();
+  });
+}
+
 router.get("/music/stream", async (req: Request, res: Response, next: NextFunction) => {
   const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
   if (!id) { res.status(400).json({ message: "Missing id" }); return; }
 
-  let audioUrl: string;
-  try {
-    audioUrl = await resolveAudioUrl(id);
-  } catch (e) {
-    return void next(e);
-  }
-
-  res.setHeader("Content-Type", "audio/mpeg");
-  res.setHeader("Cache-Control", "no-cache, no-store");
-  res.setHeader("Accept-Ranges", "none");
-  res.setHeader("Access-Control-Allow-Origin", "*");
-
-  const ff = spawn("ffmpeg", [
-    "-reconnect", "1",
-    "-reconnect_streamed", "1",
-    "-reconnect_delay_max", "5",
-    "-i", audioUrl,
-    "-vn", "-ar", "44100", "-ac", "2", "-b:a", "128k",
-    "-f", "mp3", "-",
-  ], { stdio: ["ignore", "pipe", "pipe"] });
-
-  ff.stderr.on("data", () => {});
-  ff.on("error", e => { if (!res.headersSent) next(e); else if (!res.writableEnded) res.end(); });
-  req.on("close", () => { try { ff.kill("SIGKILL"); } catch {} });
-  ff.on("close", () => { if (!res.writableEnded) res.end(); });
-  ff.stdout.pipe(res, { end: true });
+  streamMp3(req, res, id, "128k", () => {
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Cache-Control", "no-cache, no-store");
+    res.setHeader("Accept-Ranges", "none");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  }, next);
 });
 
 /* ── Download ───────────────────────────────────────────────────────────────
@@ -136,32 +154,12 @@ router.get("/music/download", async (req: Request, res: Response, next: NextFunc
     .replace(/\s+/g, "_").slice(0, 120) || `track-${id}`;
   const filename = `${safeTitle}.mp3`;
 
-  let audioUrl: string;
-  try {
-    audioUrl = await resolveAudioUrl(id);
-  } catch (e) {
-    return void next(e);
-  }
-
-  res.setHeader("Content-Type", "audio/mpeg");
-  res.setHeader("Content-Disposition", `attachment; filename="track.mp3"; filename*=UTF-8''${encodeURIComponent(filename)}`);
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Access-Control-Allow-Origin", "*");
-
-  const ff = spawn("ffmpeg", [
-    "-reconnect", "1",
-    "-reconnect_streamed", "1",
-    "-reconnect_delay_max", "5",
-    "-i", audioUrl,
-    "-vn", "-ar", "44100", "-ac", "2", "-b:a", "192k",
-    "-f", "mp3", "-",
-  ], { stdio: ["ignore", "pipe", "pipe"] });
-
-  ff.stderr.on("data", () => {});
-  ff.on("error", e => { if (!res.headersSent) next(e); else if (!res.writableEnded) res.end(); });
-  req.on("close", () => { try { ff.kill("SIGKILL"); } catch {} });
-  ff.on("close", () => { if (!res.writableEnded) res.end(); });
-  ff.stdout.pipe(res, { end: true });
+  streamMp3(req, res, id, "192k", () => {
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Content-Disposition", `attachment; filename="track.mp3"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  }, next);
 });
 
 export default router;
