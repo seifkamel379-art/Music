@@ -8,7 +8,7 @@ export type PipedTrack = {
 };
 
 export async function searchTracks(query: string): Promise<PipedTrack[]> {
-  const res = await fetch(`/api/music/search?q=${encodeURIComponent(query)}`, {
+  const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`, {
     signal: AbortSignal.timeout(15000),
   });
   if (!res.ok) throw new Error(`البحث فشل: ${res.status}`);
@@ -20,10 +20,10 @@ export async function searchTracks(query: string): Promise<PipedTrack[]> {
     artist: item.author ?? item.artist ?? "فنان غير معروف",
     duration: item.duration ?? "0:00",
     thumbnail: item.thumbnail ?? null,
-    streamUrl: `/api/music/stream?id=${item.videoId}`,
+    streamUrl: `/api/proxy?id=${item.videoId}`,
   }));
 }
 
 export function resolveStreamUrl(videoId: string): Promise<string> {
-  return Promise.resolve(`/api/music/stream?id=${videoId}`);
+  return Promise.resolve(`/api/proxy?id=${videoId}`);
 }
