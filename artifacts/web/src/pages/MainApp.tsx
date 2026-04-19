@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { searchTracks as pipedSearch } from "@/lib/piped";
+import { searchTracks as pipedSearch, API_BASE } from "@/lib/piped";
 import { storage, type Track } from "@/lib/storage";
 import { useAudioPlayer } from "@/contexts/AudioPlayerContext";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -22,12 +22,10 @@ function safeTitle(name: string) {
   return name.replace(/\.[^/.]+$/, "").slice(0, 60) || "أغنية";
 }
 
-const STREAM_API = "https://music--seifmusic9.replit.app";
-
 async function downloadTrack(track: Track, setDownloading: React.Dispatch<React.SetStateAction<Set<string>>>) {
   setDownloading(prev => new Set([...prev, track.videoId]));
   try {
-    const downloadUrl = `${STREAM_API}/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`;
+    const downloadUrl = `${API_BASE}/api/proxy?id=${encodeURIComponent(track.videoId)}`;
     const res = await fetch(downloadUrl);
     if (!res.ok) throw new Error("fetch failed");
     const blob = await res.blob();
@@ -40,7 +38,7 @@ async function downloadTrack(track: Track, setDownloading: React.Dispatch<React.
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
   } catch {
-    window.open(`${STREAM_API}/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`, "_blank", "noopener,noreferrer");
+    window.open(`${API_BASE}/api/proxy?id=${encodeURIComponent(track.videoId)}`, "_blank", "noopener,noreferrer");
   } finally {
     setDownloading(prev => { const next = new Set(prev); next.delete(track.videoId); return next; });
   }
