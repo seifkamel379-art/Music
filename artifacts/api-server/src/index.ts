@@ -10,10 +10,10 @@ const port = Number(rawPort);
 
 async function verifyRuntimeTool(command: string, args: string[]) {
   try {
-    await execFileAsync(command, args, { timeout: 10000 });
+    await execFileAsync(command, args, { timeout: 20000 });
+    logger.info({ command }, "Runtime tool OK");
   } catch (err) {
-    logger.error({ err, command }, "Required runtime tool is unavailable");
-    throw err;
+    logger.warn({ err, command }, "Runtime tool unavailable – stream/download routes may not work");
   }
 }
 
@@ -22,8 +22,8 @@ async function start() {
     throw new Error(`Invalid PORT value: "${rawPort}"`);
   }
 
-  await verifyRuntimeTool("yt-dlp", ["--version"]);
-  await verifyRuntimeTool("ffmpeg", ["-version"]);
+  verifyRuntimeTool("yt-dlp", ["--version", "--no-update"]).catch(() => {});
+  verifyRuntimeTool("ffmpeg", ["-version"]).catch(() => {});
 
   app.listen(port, (err) => {
     if (err) {

@@ -26,7 +26,7 @@ function setCache(q: string, data: any[]) {
 }
 
 const BASE = [
-  "--no-warnings", "--no-check-certificate", "--geo-bypass", "--socket-timeout", "10",
+  "--no-warnings", "--no-check-certificate", "--geo-bypass", "--socket-timeout", "10", "--no-update",
 ];
 
 function fmtDuration(s: number) {
