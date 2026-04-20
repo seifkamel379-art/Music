@@ -2,7 +2,7 @@ import { useState } from "react";
 import { storage } from "@/lib/storage";
 import { useTheme } from "@/contexts/ThemeContext";
 
-const PASS = "16168080";
+const PASS = "80801616";
 
 interface Props { onLogin: (name: string) => void; }
 

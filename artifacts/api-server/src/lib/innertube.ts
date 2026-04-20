@@ -30,8 +30,51 @@ export type TrackMeta = {
 
 export async function searchTracks(query: string): Promise<TrackMeta[]> {
   const yt = await getClient();
-  const results = await yt.search(query, { type: "video" });
 
+  /* ── YouTube Music search (songs first) ──────────────────────────────── */
+  try {
+    const musicResults = await yt.music.search(query, { type: "song" });
+    const contents: any[] =
+      (musicResults as any)?.songs?.contents ??
+      (musicResults as any)?.contents?.[0]?.contents ??
+      [];
+
+    const items: TrackMeta[] = [];
+    for (const item of contents) {
+      const id: string = item.id ?? item.video_id ?? "";
+      if (!id) continue;
+
+      const title: string =
+        item.title ?? item.name ?? "بدون عنوان";
+
+      const artistRaw = item.artists?.[0]?.name
+        ?? item.author?.name
+        ?? item.subtitle?.runs?.find((r: any) => r.endpoint?.pageType === "MUSIC_PAGE_TYPE_ARTIST")?.text
+        ?? item.subtitle?.runs?.[0]?.text
+        ?? "فنان غير معروف";
+
+      const durationRaw: string =
+        item.duration?.text
+        ?? (item.duration?.seconds != null ? fmtDuration(item.duration.seconds) : "0:00");
+
+      const thumb: string =
+        item.thumbnails?.[0]?.url ?? `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+
+      items.push({ videoId: id, title, artist: artistRaw, duration: durationRaw, thumbnail: thumb });
+      if (items.length >= 20) break;
+    }
+
+    if (items.length > 0) {
+      logger.info({ count: items.length, query }, "YT Music search OK");
+      return items;
+    }
+    logger.warn({ query }, "YT Music search returned 0 results, falling back to YT");
+  } catch (e) {
+    logger.warn({ err: e, query }, "YT Music search failed, falling back to YT");
+  }
+
+  /* ── Fallback: regular YouTube search ───────────────────────────────── */
+  const results = await yt.search(query, { type: "video" });
   const videos = (results as any)?.videos ?? [];
   const items: TrackMeta[] = [];
 
@@ -39,11 +82,14 @@ export async function searchTracks(query: string): Promise<TrackMeta[]> {
     const id: string = v.video_id ?? v.id ?? "";
     if (!id) continue;
     const title: string = v.title?.text ?? v.title ?? "بدون عنوان";
-    const artist: string = v.author?.name ?? v.short_byline_text?.runs?.[0]?.text ?? "فنان غير معروف";
-    const duration: string = v.length_text?.text ?? fmtDuration(v.duration?.seconds ?? 0);
-    const thumb: string = v.thumbnails?.[0]?.url ?? `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+    const artist: string =
+      v.author?.name ?? v.short_byline_text?.runs?.[0]?.text ?? "فنان غير معروف";
+    const duration: string =
+      v.length_text?.text ?? fmtDuration(v.duration?.seconds ?? 0);
+    const thumb: string =
+      v.thumbnails?.[0]?.url ?? `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
     items.push({ videoId: id, title, artist, duration, thumbnail: thumb });
-    if (items.length >= 15) break;
+    if (items.length >= 20) break;
   }
 
   return items;

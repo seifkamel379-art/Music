@@ -5,7 +5,7 @@ import { logger } from "../lib/logger";
 import { searchTracks } from "../lib/innertube";
 
 const router: IRouter = Router();
-const PASSWORD = "16168080";
+const PASSWORD = "80801616";
 
 /* ── Search cache ───────────────────────────────────────────────────────── */
 const searchCache = new Map<string, { data: any[]; time: number }>();
