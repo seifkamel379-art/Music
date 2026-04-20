@@ -23,7 +23,7 @@ This is a pnpm workspace monorepo. The active product is **Seif music**, a priva
 - Private login uses a shared password: `16168080`
 - UI must not mention YouTube; music source details stay hidden from users.
 - Palette lives in `artifacts/mobile/constants/colors.ts` — Spotify-style light/dark tokens with green primary, black/dark surfaces, and light-mode neutral cards.
-- **Web app streaming**: Fully client-side via public Piped API + Invidious fallback (`artifacts/web/src/lib/piped.ts`). No local server or yt-dlp/ffmpeg needed. Search and audio stream URLs fetched directly from Piped/Invidious public instances.
+- **Web app streaming**: Hybrid approach. Search uses YouTube Innertube API (via server, `lib/innertube.ts`). Stream URL is resolved server-side via `yt-dlp --get-url` (returns HLS manifest URL from Google CDN, ~2s). Browser plays HLS via `hls.js` directly from Google CDN using user's IP — no audio data goes through the Replit server. Downloads still use server-side yt-dlp+ffmpeg via `/api/music/download`.
 - **Mobile app streaming**: Still uses API server with yt-dlp + ffmpeg for MP3 conversion (192k, 44100Hz stereo).
 - Stream URLs in Track objects use the prefix `yt:VIDEO_ID` as a lazy placeholder; `AudioPlayerContext` resolves the real URL from Piped just before playback.
 - **All user data (playlist, favorites) stored client-side in localStorage/AsyncStorage** — no DB dependency for user data.

@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useMemo } from "react";
+import Hls from "hls.js";
 import { resolveStreamUrl } from "../lib/piped";
 
 export type Track = {
@@ -45,8 +46,13 @@ function updateMediaSession(track: Track | null, playing: boolean) {
   navigator.mediaSession.playbackState = playing ? "playing" : "paused";
 }
 
+function isHlsUrl(url: string): boolean {
+  return url.includes(".m3u8") || url.includes("manifest.googlevideo.com") || url.includes("hls_playlist");
+}
+
 export function AudioPlayerProvider({ children }: { children: React.ReactNode }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const hlsRef = useRef<Hls | null>(null);
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [queue, setQueue] = useState<Track[]>([]);
   const currentIdxRef = useRef(0);
@@ -111,6 +117,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
 
     return () => {
       audio.pause(); audio.src = "";
+      hlsRef.current?.destroy(); hlsRef.current = null;
       audio.removeEventListener("timeupdate", onTime);
       audio.removeEventListener("durationchange", onDur);
       audio.removeEventListener("play", onPlay);
@@ -121,6 +128,33 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       audio.removeEventListener("ended", onEnd);
     };
   }, []);
+
+  function attachHls(audio: HTMLAudioElement, url: string) {
+    if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+
+    if (Hls.isSupported()) {
+      const hls = new Hls({ enableWorker: true, lowLatencyMode: false });
+      hlsRef.current = hls;
+      hls.loadSource(url);
+      hls.attachMedia(audio);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        audio.play().catch(() => {});
+      });
+      hls.on(Hls.Events.ERROR, (_, data) => {
+        if (data.fatal) {
+          setStatus(s => ({ ...s, isBuffering: false, playing: false }));
+          hls.destroy();
+          hlsRef.current = null;
+        }
+      });
+    } else if (audio.canPlayType("application/vnd.apple.mpegurl")) {
+      audio.src = url;
+      audio.load();
+      audio.play().catch(() => {});
+    } else {
+      setStatus(s => ({ ...s, isBuffering: false }));
+    }
+  }
 
   async function loadAndPlay(track: Track) {
     const audio = audioRef.current;
@@ -140,9 +174,14 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       }
     }
 
-    audio.src = url;
-    audio.load();
-    audio.play().catch(() => {});
+    if (isHlsUrl(url)) {
+      attachHls(audio, url);
+    } else {
+      if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+      audio.src = url;
+      audio.load();
+      audio.play().catch(() => {});
+    }
   }
 
   function playTrack(track: Track, newQueue?: Track[]) {
@@ -189,6 +228,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   function clearPlayer() {
     const audio = audioRef.current;
     if (audio) { audio.pause(); audio.src = ""; }
+    if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
     setCurrentTrack(null); setQueue([]); queueRef.current = [];
     setStatus({ playing: false, currentTime: 0, duration: 0, isBuffering: false });
     updateMediaSession(null, false);
