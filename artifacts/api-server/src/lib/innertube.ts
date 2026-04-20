@@ -1,4 +1,6 @@
 import { Innertube } from "youtubei.js";
+import { Readable } from "stream";
+import { spawn } from "child_process";
 import { logger } from "./logger";
 
 let client: Innertube | null = null;
@@ -93,4 +95,39 @@ export async function searchTracks(query: string): Promise<TrackMeta[]> {
   }
 
   return items;
+}
+
+/* ── yt-dlp audio stream (iOS client, no cookies) ────────────────────────
+ *
+ * iOS player client returns HLS audio streams (formats 233/234) that work
+ * even from datacenter IPs. No cookies needed — passing cookies with the
+ * iOS client causes YouTube to return storyboards instead of audio.
+ */
+export function getAudioStream(videoId: string): {
+  stdout: Readable;
+  stderr: Readable;
+  kill: () => void;
+} {
+  const args: string[] = [
+    "--no-warnings",
+    "--no-check-certificate",
+    "--geo-bypass",
+    "--socket-timeout", "20",
+    "--no-update",
+    "--no-playlist",
+    "--extractor-args", "youtube:player_client=ios",
+    "-f", "234/233",
+    "-o", "-",
+    `https://www.youtube.com/watch?v=${videoId}`,
+  ];
+
+  logger.info({ videoId }, "yt-dlp streaming via iOS client (no cookies)");
+
+  const proc = spawn("yt-dlp", args, { stdio: ["pipe", "pipe", "pipe"] });
+
+  return {
+    stdout: proc.stdout,
+    stderr: proc.stderr,
+    kill: () => { try { proc.kill("SIGKILL"); } catch {} },
+  };
 }

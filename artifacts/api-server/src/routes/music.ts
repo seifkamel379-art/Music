@@ -1,8 +1,9 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod/v4";
+import { spawn } from "child_process";
 import type { Request, Response, NextFunction } from "express";
 import { logger } from "../lib/logger";
-import { searchTracks } from "../lib/innertube";
+import { searchTracks, getAudioStream } from "../lib/innertube";
 
 const router: IRouter = Router();
 const PASSWORD = "80801616";
@@ -49,6 +50,98 @@ router.get("/music/search", async (req: Request, res: Response, next: NextFuncti
     logger.error({ err: e }, "Search failed");
     next(e);
   }
+});
+
+/* ── Core: yt-dlp → ffmpeg → MP3 ───────────────────────────────────────── */
+function streamMp3(
+  res: Response,
+  videoId: string,
+  bitrate: "128k" | "192k",
+  onHeaders: () => void,
+  next: NextFunction,
+) {
+  const source = getAudioStream(videoId);
+
+  const ff = spawn("ffmpeg", [
+    "-i", "pipe:0",
+    "-vn", "-ar", "44100", "-ac", "2",
+    "-b:a", bitrate, "-f", "mp3", "-",
+  ], { stdio: ["pipe", "pipe", "pipe"] });
+
+  let ffmpegStderr = "";
+  let ytdlpStderr = "";
+  let sentAudio = false;
+  let closed = false;
+
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    source.kill();
+    try { ff.kill("SIGKILL"); } catch {}
+  };
+
+  source.stderr.on("data", (chunk: Buffer) => {
+    ytdlpStderr = `${ytdlpStderr}${chunk}`.slice(-3000);
+  });
+  ff.stderr.on("data", chunk => {
+    ffmpegStderr = `${ffmpegStderr}${chunk}`.slice(-2000);
+  });
+  source.stdout.on("error", e => {
+    logger.error({ err: e, videoId }, "yt-dlp stdout error");
+    cleanup();
+    if (!res.writableEnded) res.end();
+  });
+  ff.on("error", e => {
+    logger.error({ err: e, videoId }, "ffmpeg process failed");
+    if (!res.headersSent) next(e); else if (!res.writableEnded) res.end();
+  });
+  ff.stdin.on("error", () => {});
+
+  onHeaders();
+  if (typeof res.flushHeaders === "function") res.flushHeaders();
+
+  source.stdout.pipe(ff.stdin);
+  res.on("close", cleanup);
+
+  ff.stdout.on("data", chunk => { sentAudio = true; res.write(chunk); });
+  ff.stdout.on("end", () => { if (!res.writableEnded) res.end(); });
+  ff.on("close", code => {
+    if (!sentAudio) {
+      logger.error({ code, videoId, ytdlpStderr, ffmpegStderr }, "No audio output");
+    }
+    if (!res.writableEnded) res.end();
+  });
+}
+
+/* ── Stream endpoint ────────────────────────────────────────────────────── */
+router.get("/music/stream", (req: Request, res: Response, next: NextFunction) => {
+  const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
+  if (!id) { res.status(400).json({ message: "Missing id" }); return; }
+  streamMp3(res, id, "128k", () => {
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Cache-Control", "no-cache, no-store");
+    res.setHeader("Accept-Ranges", "none");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  }, next);
+});
+
+/* ── Download endpoint ──────────────────────────────────────────────────── */
+router.get("/music/download", (req: Request, res: Response, next: NextFunction) => {
+  const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
+  const rawTitle = typeof req.query.title === "string" ? req.query.title.trim() : "track";
+  if (!id) { res.status(400).json({ message: "Missing id" }); return; }
+
+  const safeTitle = rawTitle
+    .replace(/[^\w\u0600-\u06FF\s\-().]/g, "").trim()
+    .replace(/\s+/g, "_").slice(0, 120) || `track-${id}`;
+  const filename = `${safeTitle}.mp3`;
+
+  streamMp3(res, id, "192k", () => {
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Content-Disposition", `attachment; filename="track.mp3"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  }, next);
 });
 
 export default router;

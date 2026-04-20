@@ -1,6 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import { searchTracks as apiSearch } from "@/lib/piped";
-import { resolveAudioUrl } from "@/lib/invidious";
 import { storage, type Track } from "@/lib/storage";
 import { useAudioPlayer } from "@/contexts/AudioPlayerContext";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -165,25 +164,24 @@ export default function MainApp({ userName, onLogout }: Props) {
 
   const isFav = useCallback((id: string) => favorites.some(t => t.videoId === id), [favorites]);
 
-  async function handleDownload(track: Track) {
-    showToast("جارٍ تحضير التحميل...");
-    try {
-      const src = track.localUrl ?? await resolveAudioUrl(track.videoId);
-      const resp = await fetch(src);
-      if (!resp.ok) throw new Error(`فشل جلب الملف: ${resp.status}`);
-      const blob = await resp.blob();
-      const blobUrl = URL.createObjectURL(blob);
+  function handleDownload(track: Track) {
+    if (track.localUrl) {
       const a = document.createElement("a");
-      a.href = blobUrl;
-      a.download = `${track.title}.m4a`;
+      a.href = track.localUrl;
+      a.download = `${track.title}.mp3`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
-    } catch (e) {
-      console.error("Download failed", e);
-      showToast("فشل التحميل، حاول مرة أخرى");
+      return;
     }
+    const url = `/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${track.title}.mp3`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showToast("جارٍ تحضير التحميل...");
   }
 
   function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
