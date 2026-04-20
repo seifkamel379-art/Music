@@ -19,16 +19,6 @@ export async function searchTracks(query: string): Promise<PipedTrack[]> {
     artist: item.artist ?? item.author ?? "فنان غير معروف",
     duration: item.duration ?? "0:00",
     thumbnail: item.thumbnail ?? null,
-    streamUrl: `yt:${item.videoId}`,
+    streamUrl: `/api/music/stream?id=${item.videoId}`,
   }));
-}
-
-export async function resolveStreamUrl(videoId: string): Promise<string> {
-  const res = await fetch(`/api/music/stream-url?id=${encodeURIComponent(videoId)}`, {
-    signal: AbortSignal.timeout(20000),
-  });
-  if (!res.ok) throw new Error(`فشل جلب رابط الصوت: ${res.status}`);
-  const data = await res.json();
-  if (!data?.url) throw new Error("لا يوجد رابط صوت");
-  return data.url;
 }
