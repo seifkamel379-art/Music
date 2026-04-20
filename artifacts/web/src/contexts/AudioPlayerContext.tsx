@@ -121,13 +121,29 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     };
   }, []);
 
-  function loadAndPlay(track: Track) {
+  async function loadAndPlay(track: Track) {
     const audio = audioRef.current;
     if (!audio) return;
     setCurrentTrack(track);
     setStatus({ playing: false, currentTime: 0, duration: 0, isBuffering: true });
     updateMediaSession(track, false);
-    audio.src = track.streamUrl;
+
+    let src = track.streamUrl;
+    if (src.startsWith("yt:")) {
+      const videoId = src.slice(3);
+      try {
+        const res = await fetch(`/api/music/stream-url?id=${encodeURIComponent(videoId)}`);
+        if (!res.ok) throw new Error(`stream-url ${res.status}`);
+        const data = await res.json() as { url: string };
+        src = data.url;
+      } catch (e) {
+        console.error("Failed to resolve stream URL", e);
+        setStatus(s => ({ ...s, isBuffering: false, playing: false }));
+        return;
+      }
+    }
+
+    audio.src = src;
     audio.load();
     audio.play().catch(() => {});
   }
