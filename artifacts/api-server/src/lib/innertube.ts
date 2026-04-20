@@ -1,13 +1,10 @@
 import { Innertube } from "youtubei.js";
+import { Readable } from "stream";
 import { logger } from "./logger";
-import { execFile } from "child_process";
-import { promisify } from "util";
-
-const execFileAsync = promisify(execFile);
 
 let client: Innertube | null = null;
 let clientCreatedAt = 0;
-const TTL = 60 * 60 * 1000;
+const TTL = 55 * 60 * 1000;
 
 export async function getClient(): Promise<Innertube> {
   if (client && Date.now() - clientCreatedAt < TTL) return client;
@@ -53,20 +50,12 @@ export async function searchTracks(query: string): Promise<TrackMeta[]> {
   return items;
 }
 
-const YTDLP_BASE = [
-  "--no-warnings", "--no-check-certificate", "--geo-bypass",
-  "--socket-timeout", "10", "--no-update",
-];
-
-export async function resolveHlsUrl(videoId: string): Promise<string> {
-  const { stdout } = await execFileAsync("yt-dlp", [
-    ...YTDLP_BASE,
-    "-f", "bestaudio",
-    "--get-url",
-    `https://www.youtube.com/watch?v=${videoId}`,
-  ], { timeout: 20000 });
-
-  const url = stdout.trim().split("\n")[0];
-  if (!url) throw new Error("No URL returned from yt-dlp");
-  return url;
+export async function getAudioStream(videoId: string): Promise<Readable> {
+  const yt = await getClient();
+  const webStream = await yt.download(videoId, {
+    type: "audio",
+    quality: "best",
+    client: "IOS",
+  });
+  return Readable.fromWeb(webStream as any);
 }

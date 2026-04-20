@@ -1,9 +1,9 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod/v4";
-import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
+import { spawn } from "child_process";
 import type { Request, Response, NextFunction } from "express";
 import { logger } from "../lib/logger";
-import { searchTracks, resolveHlsUrl } from "../lib/innertube";
+import { searchTracks, getAudioStream } from "../lib/innertube";
 
 const router: IRouter = Router();
 const PASSWORD = "16168080";
@@ -22,22 +22,6 @@ function setCache(q: string, data: any[]) {
     searchCache.delete(k);
   }
   searchCache.set(q, { data, time: Date.now() });
-}
-
-/* ── Stream URL cache ───────────────────────────────────────────────────── */
-const urlCache = new Map<string, { url: string; time: number }>();
-const URL_TTL = 5 * 60 * 1000;
-
-function getCachedUrl(id: string) {
-  const c = urlCache.get(id);
-  return c && Date.now() - c.time < URL_TTL ? c.url : null;
-}
-function setCachedUrl(id: string, url: string) {
-  if (urlCache.size >= 200) {
-    const [k] = [...urlCache.entries()].sort((a, b) => a[1].time - b[1].time)[0];
-    urlCache.delete(k);
-  }
-  urlCache.set(id, { url, time: Date.now() });
 }
 
 /* ── Login ──────────────────────────────────────────────────────────────── */
@@ -81,85 +65,71 @@ router.get("/music/stream-url", (req: Request, res: Response) => {
   res.json({ url: `/api/music/stream?id=${encodeURIComponent(id)}` });
 });
 
-/* ── yt-dlp helpers (kept for mobile streaming) ──────────────────────────── */
-const YTDLP_BASE = [
-  "--no-warnings", "--no-check-certificate", "--geo-bypass",
-  "--socket-timeout", "10", "--no-update",
-];
-
-function fmtDuration(s: number) {
-  const n = Math.floor(s);
-  return `${Math.floor(n / 60)}:${(n % 60).toString().padStart(2, "0")}`;
-}
-
-function createYtDlpAudioProcess(videoId: string): ChildProcessWithoutNullStreams {
-  return spawn("yt-dlp", [
-    "-f", "bestaudio",
-    "-o", "-",
-    ...YTDLP_BASE,
-    "--no-playlist",
-    `https://www.youtube.com/watch?v=${videoId}`,
-  ], { stdio: ["pipe", "pipe", "pipe"] });
-}
-
-function streamMp3(
+/* ── Core: stream audio via Innertube → ffmpeg → MP3 ────────────────────── */
+async function streamMp3(
   res: Response,
   videoId: string,
   bitrate: "128k" | "192k",
   onHeaders: () => void,
   next: NextFunction,
 ) {
-  onHeaders();
-  if (typeof res.flushHeaders === "function") res.flushHeaders();
+  let audioSource: import("stream").Readable;
+  try {
+    audioSource = await getAudioStream(videoId);
+  } catch (e) {
+    logger.error({ err: e, videoId }, "Innertube getAudioStream failed");
+    if (!res.headersSent) next(e);
+    return;
+  }
 
-  const ytdlp = createYtDlpAudioProcess(videoId);
   const ff = spawn("ffmpeg", [
-    "-i", "pipe:0", "-vn", "-ar", "44100", "-ac", "2",
+    "-i", "pipe:0",
+    "-vn", "-ar", "44100", "-ac", "2",
     "-b:a", bitrate, "-f", "mp3", "-",
   ], { stdio: ["pipe", "pipe", "pipe"] });
 
-  let ytdlpStderr = "";
   let ffmpegStderr = "";
   let sentAudio = false;
   let closed = false;
 
-  ytdlp.stdout.pipe(ff.stdin);
-  ytdlp.stderr.on("data", chunk => { ytdlpStderr = `${ytdlpStderr}${chunk}`.slice(-2000); });
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    audioSource.destroy();
+    try { ff.kill("SIGKILL"); } catch {}
+  };
+
   ff.stderr.on("data", chunk => { ffmpegStderr = `${ffmpegStderr}${chunk}`.slice(-2000); });
-  ytdlp.on("error", e => {
-    logger.error({ err: e, videoId }, "yt-dlp process failed");
-    if (!res.headersSent) next(e); else if (!res.writableEnded) res.end();
-  });
   ff.on("error", e => {
     logger.error({ err: e, videoId }, "ffmpeg process failed");
     if (!res.headersSent) next(e); else if (!res.writableEnded) res.end();
   });
   ff.stdin.on("error", () => {});
+  audioSource.on("error", e => {
+    logger.error({ err: e, videoId }, "Innertube audio source error");
+    cleanup();
+    if (!res.writableEnded) res.end();
+  });
 
-  const cleanup = () => {
-    if (closed) return;
-    closed = true;
-    try { ytdlp.kill("SIGKILL"); } catch {}
-    try { ff.kill("SIGKILL"); } catch {}
-  };
+  onHeaders();
+  if (typeof res.flushHeaders === "function") res.flushHeaders();
 
+  audioSource.pipe(ff.stdin);
   res.on("close", cleanup);
+
   ff.stdout.on("data", chunk => { sentAudio = true; res.write(chunk); });
   ff.stdout.on("end", () => { if (!res.writableEnded) res.end(); });
-  ytdlp.on("close", code => {
-    if (code && code !== 0) logger.error({ code, videoId, stderr: ytdlpStderr }, "yt-dlp exited");
-  });
   ff.on("close", code => {
-    if (!sentAudio) logger.error({ code, videoId, ytdlpStderr, ffmpegStderr }, "No audio output");
+    if (!sentAudio) logger.error({ code, videoId, ffmpegStderr }, "No audio output from ffmpeg");
     if (!res.writableEnded) res.end();
   });
 }
 
-/* ── Stream (mobile) ────────────────────────────────────────────────────── */
+/* ── Stream (web + mobile) ──────────────────────────────────────────────── */
 router.get("/music/stream", async (req: Request, res: Response, next: NextFunction) => {
   const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
   if (!id) { res.status(400).json({ message: "Missing id" }); return; }
-  streamMp3(res, id, "128k", () => {
+  await streamMp3(res, id, "128k", () => {
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Cache-Control", "no-cache, no-store");
     res.setHeader("Accept-Ranges", "none");
@@ -167,7 +137,7 @@ router.get("/music/stream", async (req: Request, res: Response, next: NextFuncti
   }, next);
 });
 
-/* ── Download (mobile) ──────────────────────────────────────────────────── */
+/* ── Download ───────────────────────────────────────────────────────────── */
 router.get("/music/download", async (req: Request, res: Response, next: NextFunction) => {
   const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
   const rawTitle = typeof req.query.title === "string" ? req.query.title.trim() : "track";
@@ -178,7 +148,7 @@ router.get("/music/download", async (req: Request, res: Response, next: NextFunc
     .replace(/\s+/g, "_").slice(0, 120) || `track-${id}`;
   const filename = `${safeTitle}.mp3`;
 
-  streamMp3(res, id, "192k", () => {
+  await streamMp3(res, id, "192k", () => {
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Content-Disposition", `attachment; filename="track.mp3"; filename*=UTF-8''${encodeURIComponent(filename)}`);
     res.setHeader("Cache-Control", "no-cache");
