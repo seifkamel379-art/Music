@@ -8,8 +8,19 @@ const TTL = 55 * 60 * 1000;
 
 export async function getClient(): Promise<Innertube> {
   if (client && Date.now() - clientCreatedAt < TTL) return client;
-  logger.info("Initializing Innertube client");
-  client = await Innertube.create({ generate_session_locally: true });
+
+  const cookie = process.env.YOUTUBE_COOKIE?.trim() || undefined;
+
+  logger.info(
+    { hasAuth: !!cookie },
+    cookie ? "Initializing Innertube client with cookie auth" : "Initializing Innertube client (no cookie — may fail on production)",
+  );
+
+  client = await Innertube.create({
+    generate_session_locally: true,
+    cookie,
+  });
+
   clientCreatedAt = Date.now();
   logger.info("Innertube client ready");
   return client;
@@ -52,10 +63,12 @@ export async function searchTracks(query: string): Promise<TrackMeta[]> {
 
 export async function getAudioStream(videoId: string): Promise<Readable> {
   const yt = await getClient();
+
   const webStream = await yt.download(videoId, {
     type: "audio",
     quality: "best",
-    client: "IOS",
+    client: "WEB",
   });
+
   return Readable.fromWeb(webStream as any);
 }
