@@ -4,7 +4,6 @@ export type PipedTrack = {
   artist: string;
   duration: string;
   thumbnail: string | null;
-  streamUrl: string;
 };
 
 export async function searchTracks(query: string): Promise<PipedTrack[]> {
@@ -19,6 +18,5 @@ export async function searchTracks(query: string): Promise<PipedTrack[]> {
     artist: item.artist ?? item.author ?? "فنان غير معروف",
     duration: item.duration ?? "0:00",
     thumbnail: item.thumbnail ?? null,
-    streamUrl: `/api/music/stream?id=${item.videoId}`,
   }));
 }

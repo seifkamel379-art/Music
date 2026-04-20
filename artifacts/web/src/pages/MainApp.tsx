@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import { searchTracks as apiSearch } from "@/lib/piped";
+import { resolveAudioUrl } from "@/lib/invidious";
 import { storage, type Track } from "@/lib/storage";
 import { useAudioPlayer } from "@/contexts/AudioPlayerContext";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -164,15 +165,25 @@ export default function MainApp({ userName, onLogout }: Props) {
 
   const isFav = useCallback((id: string) => favorites.some(t => t.videoId === id), [favorites]);
 
-  function handleDownload(track: Track) {
-    const url = `/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`;
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${track.title}.mp3`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  async function handleDownload(track: Track) {
     showToast("جارٍ تحضير التحميل...");
+    try {
+      const src = track.localUrl ?? await resolveAudioUrl(track.videoId);
+      const resp = await fetch(src);
+      if (!resp.ok) throw new Error(`فشل جلب الملف: ${resp.status}`);
+      const blob = await resp.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = `${track.title}.m4a`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+    } catch (e) {
+      console.error("Download failed", e);
+      showToast("فشل التحميل، حاول مرة أخرى");
+    }
   }
 
   function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
@@ -189,8 +200,8 @@ export default function MainApp({ userName, onLogout }: Props) {
   }
 
   function playDevice(dt: DeviceTrack) {
-    const t: Track = { videoId: dt.id, title: dt.title, artist: dt.artist, duration: "", thumbnail: null, streamUrl: dt.url };
-    const all = deviceTracks.map(d => ({ videoId: d.id, title: d.title, artist: d.artist, duration: "", thumbnail: null, streamUrl: d.url }));
+    const t: Track = { videoId: dt.id, title: dt.title, artist: dt.artist, duration: "", thumbnail: null, localUrl: dt.url };
+    const all = deviceTracks.map(d => ({ videoId: d.id, title: d.title, artist: d.artist, duration: "", thumbnail: null, localUrl: d.url }));
     playTrack(t, all);
   }
 

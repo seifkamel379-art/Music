@@ -4,7 +4,7 @@ export type Track = {
   artist: string;
   duration: string;
   thumbnail: string | null;
-  streamUrl: string;
+  localUrl?: string;
 };
 
 function get<T>(key: string, fallback: T): T {

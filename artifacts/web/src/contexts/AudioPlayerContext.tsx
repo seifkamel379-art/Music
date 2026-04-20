@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useMemo } from "react";
+import { resolveAudioUrl } from "@/lib/invidious";
 
 export type Track = {
   videoId: string;
@@ -6,7 +7,7 @@ export type Track = {
   artist: string;
   duration: string;
   thumbnail: string | null;
-  streamUrl: string;
+  localUrl?: string;
 };
 
 type Status = {
@@ -128,24 +129,15 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     setStatus({ playing: false, currentTime: 0, duration: 0, isBuffering: true });
     updateMediaSession(track, false);
 
-    let src = track.streamUrl;
-    if (src.startsWith("yt:")) {
-      const videoId = src.slice(3);
-      try {
-        const res = await fetch(`/api/music/stream-url?id=${encodeURIComponent(videoId)}`);
-        if (!res.ok) throw new Error(`stream-url ${res.status}`);
-        const data = await res.json() as { url: string };
-        src = data.url;
-      } catch (e) {
-        console.error("Failed to resolve stream URL", e);
-        setStatus(s => ({ ...s, isBuffering: false, playing: false }));
-        return;
-      }
+    try {
+      const src = track.localUrl ?? await resolveAudioUrl(track.videoId);
+      audio.src = src;
+      audio.load();
+      audio.play().catch(() => {});
+    } catch (e) {
+      console.error("Failed to resolve audio URL", e);
+      setStatus(s => ({ ...s, isBuffering: false, playing: false }));
     }
-
-    audio.src = src;
-    audio.load();
-    audio.play().catch(() => {});
   }
 
   function playTrack(track: Track, newQueue?: Track[]) {
