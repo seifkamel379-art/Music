@@ -44,10 +44,7 @@ router.get("/music/search", async (req: Request, res: Response, next: NextFuncti
     if (cached) { res.json(cached); return; }
 
     const tracks = await searchTracks(q);
-    const result = tracks.map(t => ({
-      ...t,
-      streamUrl: `yt:${t.videoId}`,
-    }));
+    const result = tracks.map(t => ({ ...t, streamUrl: `yt:${t.videoId}` }));
 
     setCache(q, result);
     res.json(result);
@@ -57,7 +54,7 @@ router.get("/music/search", async (req: Request, res: Response, next: NextFuncti
   }
 });
 
-/* ── Stream URL resolver → always returns our own stream endpoint ────────── */
+/* ── Stream URL resolver ────────────────────────────────────────────────── */
 router.get("/music/stream-url", (req: Request, res: Response) => {
   const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
   if (!id) { res.status(400).json({ message: "Missing id" }); return; }
@@ -65,22 +62,15 @@ router.get("/music/stream-url", (req: Request, res: Response) => {
   res.json({ url: `/api/music/stream?id=${encodeURIComponent(id)}` });
 });
 
-/* ── Core: stream audio via Innertube → ffmpeg → MP3 ────────────────────── */
-async function streamMp3(
+/* ── Core: yt-dlp → ffmpeg → MP3 ───────────────────────────────────────── */
+function streamMp3(
   res: Response,
   videoId: string,
   bitrate: "128k" | "192k",
   onHeaders: () => void,
   next: NextFunction,
 ) {
-  let audioSource: import("stream").Readable;
-  try {
-    audioSource = await getAudioStream(videoId);
-  } catch (e) {
-    logger.error({ err: e, videoId }, "Innertube getAudioStream failed");
-    if (!res.headersSent) next(e);
-    return;
-  }
+  const source = getAudioStream(videoId);
 
   const ff = spawn("ffmpeg", [
     "-i", "pipe:0",
@@ -89,47 +79,59 @@ async function streamMp3(
   ], { stdio: ["pipe", "pipe", "pipe"] });
 
   let ffmpegStderr = "";
+  let ytdlpStderr = "";
   let sentAudio = false;
   let closed = false;
 
   const cleanup = () => {
     if (closed) return;
     closed = true;
-    audioSource.destroy();
+    source.kill();
     try { ff.kill("SIGKILL"); } catch {}
   };
 
-  ff.stderr.on("data", chunk => { ffmpegStderr = `${ffmpegStderr}${chunk}`.slice(-2000); });
+  source.stderr.on("data", (chunk: Buffer) => {
+    ytdlpStderr = `${ytdlpStderr}${chunk}`.slice(-3000);
+  });
+
+  ff.stderr.on("data", chunk => {
+    ffmpegStderr = `${ffmpegStderr}${chunk}`.slice(-2000);
+  });
+
+  source.stdout.on("error", e => {
+    logger.error({ err: e, videoId }, "yt-dlp stdout error");
+    cleanup();
+    if (!res.writableEnded) res.end();
+  });
+
   ff.on("error", e => {
     logger.error({ err: e, videoId }, "ffmpeg process failed");
     if (!res.headersSent) next(e); else if (!res.writableEnded) res.end();
   });
   ff.stdin.on("error", () => {});
-  audioSource.on("error", e => {
-    logger.error({ err: e, videoId }, "Innertube audio source error");
-    cleanup();
-    if (!res.writableEnded) res.end();
-  });
 
   onHeaders();
   if (typeof res.flushHeaders === "function") res.flushHeaders();
 
-  audioSource.pipe(ff.stdin);
+  source.stdout.pipe(ff.stdin);
   res.on("close", cleanup);
 
   ff.stdout.on("data", chunk => { sentAudio = true; res.write(chunk); });
   ff.stdout.on("end", () => { if (!res.writableEnded) res.end(); });
+
   ff.on("close", code => {
-    if (!sentAudio) logger.error({ code, videoId, ffmpegStderr }, "No audio output from ffmpeg");
+    if (!sentAudio) {
+      logger.error({ code, videoId, ytdlpStderr, ffmpegStderr }, "No audio output");
+    }
     if (!res.writableEnded) res.end();
   });
 }
 
-/* ── Stream (web + mobile) ──────────────────────────────────────────────── */
-router.get("/music/stream", async (req: Request, res: Response, next: NextFunction) => {
+/* ── Stream endpoint ────────────────────────────────────────────────────── */
+router.get("/music/stream", (req: Request, res: Response, next: NextFunction) => {
   const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
   if (!id) { res.status(400).json({ message: "Missing id" }); return; }
-  await streamMp3(res, id, "128k", () => {
+  streamMp3(res, id, "128k", () => {
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Cache-Control", "no-cache, no-store");
     res.setHeader("Accept-Ranges", "none");
@@ -137,8 +139,8 @@ router.get("/music/stream", async (req: Request, res: Response, next: NextFuncti
   }, next);
 });
 
-/* ── Download ───────────────────────────────────────────────────────────── */
-router.get("/music/download", async (req: Request, res: Response, next: NextFunction) => {
+/* ── Download endpoint ──────────────────────────────────────────────────── */
+router.get("/music/download", (req: Request, res: Response, next: NextFunction) => {
   const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
   const rawTitle = typeof req.query.title === "string" ? req.query.title.trim() : "track";
   if (!id) { res.status(400).json({ message: "Missing id" }); return; }
@@ -148,7 +150,7 @@ router.get("/music/download", async (req: Request, res: Response, next: NextFunc
     .replace(/\s+/g, "_").slice(0, 120) || `track-${id}`;
   const filename = `${safeTitle}.mp3`;
 
-  await streamMp3(res, id, "192k", () => {
+  streamMp3(res, id, "192k", () => {
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Content-Disposition", `attachment; filename="track.mp3"; filename*=UTF-8''${encodeURIComponent(filename)}`);
     res.setHeader("Cache-Control", "no-cache");

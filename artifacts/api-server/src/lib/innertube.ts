@@ -1,5 +1,6 @@
 import { Innertube } from "youtubei.js";
 import { Readable } from "stream";
+import { spawn } from "child_process";
 import { logger } from "./logger";
 
 let client: Innertube | null = null;
@@ -8,19 +9,8 @@ const TTL = 55 * 60 * 1000;
 
 export async function getClient(): Promise<Innertube> {
   if (client && Date.now() - clientCreatedAt < TTL) return client;
-
-  const cookie = process.env.YOUTUBE_COOKIE?.trim() || undefined;
-
-  logger.info(
-    { hasAuth: !!cookie },
-    cookie ? "Initializing Innertube client with cookie auth" : "Initializing Innertube client (no cookie — may fail on production)",
-  );
-
-  client = await Innertube.create({
-    generate_session_locally: true,
-    cookie,
-  });
-
+  logger.info("Initializing Innertube client");
+  client = await Innertube.create({ generate_session_locally: true });
   clientCreatedAt = Date.now();
   logger.info("Innertube client ready");
   return client;
@@ -61,14 +51,39 @@ export async function searchTracks(query: string): Promise<TrackMeta[]> {
   return items;
 }
 
-export async function getAudioStream(videoId: string): Promise<Readable> {
-  const yt = await getClient();
+/* ── yt-dlp audio stream ──────────────────────────────────────────────────── *
+ *
+ * Strategy: IOS player client returns m3u8 HLS audio streams (formats 233/234)
+ * that work even from datacenter IPs. Cookies must NOT be passed because they
+ * interfere with the iOS client and cause YouTube to return only storyboards.
+ *
+ * Format priority: bestaudio[ext=mp4] → bestaudio → format 234 (high) → 233 (low)
+ */
+export function getAudioStream(videoId: string): {
+  stdout: Readable;
+  stderr: Readable;
+  kill: () => void;
+} {
+  const args: string[] = [
+    "--no-warnings",
+    "--no-check-certificate",
+    "--geo-bypass",
+    "--socket-timeout", "20",
+    "--no-update",
+    "--no-playlist",
+    "--extractor-args", "youtube:player_client=ios",
+    "-f", "bestaudio[ext=mp4]/bestaudio/234/233",
+    "-o", "-",
+    `https://www.youtube.com/watch?v=${videoId}`,
+  ];
 
-  const webStream = await yt.download(videoId, {
-    type: "audio",
-    quality: "best",
-    client: "WEB",
-  });
+  logger.info({ videoId }, "yt-dlp streaming via IOS client");
 
-  return Readable.fromWeb(webStream as any);
+  const proc = spawn("yt-dlp", args, { stdio: ["pipe", "pipe", "pipe"] });
+
+  return {
+    stdout: proc.stdout,
+    stderr: proc.stderr,
+    kill: () => { try { proc.kill("SIGKILL"); } catch {} },
+  };
 }
