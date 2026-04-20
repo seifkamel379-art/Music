@@ -73,28 +73,12 @@ router.get("/music/search", async (req: Request, res: Response, next: NextFuncti
   }
 });
 
-/* ── Stream URL resolver (Innertube → direct CDN URL) ───────────────────── */
-router.get("/music/stream-url", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
-    if (!id) { res.status(400).json({ message: "Missing id" }); return; }
-
-    const cached = getCachedUrl(id);
-    if (cached) {
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      res.json({ url: cached });
-      return;
-    }
-
-    const url = await resolveHlsUrl(id);
-    setCachedUrl(id, url);
-
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.json({ url });
-  } catch (e) {
-    logger.error({ err: e }, "Stream URL resolution failed");
-    next(e);
-  }
+/* ── Stream URL resolver → always returns our own stream endpoint ────────── */
+router.get("/music/stream-url", (req: Request, res: Response) => {
+  const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
+  if (!id) { res.status(400).json({ message: "Missing id" }); return; }
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.json({ url: `/api/music/stream?id=${encodeURIComponent(id)}` });
 });
 
 /* ── yt-dlp helpers (kept for mobile streaming) ──────────────────────────── */
