@@ -185,18 +185,13 @@ export default function MainApp({ userName, onLogout }: Props) {
     setDownloadingIds(prev => new Set([...prev, track.videoId]));
 
     try {
-      showToast("جارٍ تحضير التحميل...");
-      const dlUrl = `/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`;
-      const a = document.createElement("a");
-      a.href = dlUrl;
-      a.download = `${track.title}.mp3`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      showToast("بدأ التحميل");
+      const ytUrl = `https://www.youtube.com/watch?v=${track.videoId}`;
+      const cobaltUrl = `https://cobalt.tools/?url=${encodeURIComponent(ytUrl)}`;
+      window.open(cobaltUrl, "_blank", "noopener,noreferrer");
+      showToast("افتح صفحة التحميل واضغط Download");
     } catch (e) {
       console.error("[download] error:", e);
-      showToast("فشل التحميل، جرب مرة أخرى");
+      showToast("فشل فتح صفحة التحميل");
     } finally {
       setTimeout(() => {
         setDownloadingIds(prev => {
@@ -204,7 +199,7 @@ export default function MainApp({ userName, onLogout }: Props) {
           next.delete(track.videoId);
           return next;
         });
-      }, 2000);
+      }, 1500);
     }
   }
 
