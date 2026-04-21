@@ -3,8 +3,40 @@ import { z } from "zod/v4";
 import { type Readable } from "stream";
 import type { Request, Response, NextFunction } from "express";
 import { spawn } from "child_process";
+import { writeFileSync, mkdtempSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 import { logger } from "../lib/logger";
 import { searchTracks, getAudioStream } from "../lib/innertube";
+
+/* ── Cookie file for yt-dlp (Netscape format, written once at startup) ──── */
+let cookieFilePath: string | null = null;
+function getCookieFile(): string | null {
+  if (cookieFilePath) return cookieFilePath;
+  const cookieHeader = process.env["YOUTUBE_COOKIE"];
+  if (!cookieHeader) return null;
+  try {
+    const dir = mkdtempSync(join(tmpdir(), "yt-cookies-"));
+    const file = join(dir, "cookies.txt");
+    const lines = ["# Netscape HTTP Cookie File"];
+    const expiry = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 365;
+    for (const part of cookieHeader.split(";")) {
+      const eq = part.indexOf("=");
+      if (eq < 1) continue;
+      const name = part.slice(0, eq).trim();
+      const value = part.slice(eq + 1).trim();
+      if (!name) continue;
+      // domain  flag  path  secure  expiry  name  value
+      lines.push([".youtube.com", "TRUE", "/", "TRUE", String(expiry), name, value].join("\t"));
+    }
+    writeFileSync(file, lines.join("\n") + "\n", "utf8");
+    cookieFilePath = file;
+    return file;
+  } catch (e) {
+    logger.warn({ err: e }, "Failed to write yt-dlp cookie file");
+    return null;
+  }
+}
 
 const router: IRouter = Router();
 const PASSWORD = "80801616";
@@ -105,26 +137,28 @@ async function tryInvidious(videoId: string): Promise<StreamResult | null> {
   return null;
 }
 
-/** Stream via yt-dlp using YOUTUBE_COOKIE env var (final, most reliable fallback). */
-function tryYtDlp(videoId: string): Promise<StreamResult | null> {
+/** Stream via yt-dlp with a Netscape cookie file + multi-client fallback. */
+function tryYtDlpOnce(videoId: string, playerClient: string): Promise<StreamResult | null> {
   return new Promise((resolve) => {
-    const cookie = process.env["YOUTUBE_COOKIE"];
     const url = `https://www.youtube.com/watch?v=${videoId}`;
+    const cookieFile = getCookieFile();
     const args = [
-      "-f", "bestaudio[ext=m4a]/bestaudio",
+      "-f", "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
       "-o", "-",
       "--no-warnings",
       "--no-playlist",
       "--quiet",
+      "--no-progress",
+      "--extractor-args", `youtube:player_client=${playerClient}`,
     ];
-    if (cookie) args.push("--add-header", `Cookie:${cookie}`);
+    if (cookieFile) args.push("--cookies", cookieFile);
     args.push("--", url);
 
     let child;
     try {
       child = spawn("yt-dlp", args, { stdio: ["ignore", "pipe", "pipe"] });
     } catch (e) {
-      logger.warn({ err: e, videoId }, "yt-dlp spawn failed");
+      logger.warn({ err: e, videoId, playerClient }, "yt-dlp spawn failed");
       resolve(null);
       return;
     }
@@ -135,28 +169,37 @@ function tryYtDlp(videoId: string): Promise<StreamResult | null> {
     let resolved = false;
     const cleanup = () => { try { child.kill("SIGKILL"); } catch {} };
 
-    // Resolve as soon as we get the first byte of audio data.
     child.stdout.once("data", () => {
       if (resolved) return;
       resolved = true;
-      logger.info({ videoId }, "yt-dlp streaming OK");
+      logger.info({ videoId, playerClient }, "yt-dlp streaming OK");
       resolve({ stream: child.stdout as unknown as Readable, contentType: "audio/mp4", cleanup });
     });
 
     child.on("error", (err) => {
       if (resolved) return;
       resolved = true;
-      logger.warn({ err, videoId }, "yt-dlp process error");
+      logger.warn({ err, videoId, playerClient }, "yt-dlp process error");
       resolve(null);
     });
 
     child.on("close", (code) => {
       if (resolved) return;
       resolved = true;
-      logger.warn({ videoId, code, stderr }, "yt-dlp exited before producing data");
+      logger.warn({ videoId, playerClient, code, stderr }, "yt-dlp exited before data");
       resolve(null);
     });
   });
+}
+
+async function tryYtDlp(videoId: string): Promise<StreamResult | null> {
+  // Try player clients in order — tv_embedded and ios bypass most restrictions.
+  const clients = ["tv_embedded", "ios", "android", "web"];
+  for (const c of clients) {
+    const result = await tryYtDlpOnce(videoId, c);
+    if (result) return result;
+  }
+  return null;
 }
 
 /** Resolve stream: Innertube → Invidious → yt-dlp (with cookies). */

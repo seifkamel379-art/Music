@@ -8,8 +8,9 @@ const TTL = 55 * 60 * 1000;
 
 export async function getClient(): Promise<Innertube> {
   if (client && Date.now() - clientCreatedAt < TTL) return client;
-  logger.info("Initializing Innertube client");
-  client = await Innertube.create({});
+  const cookie = process.env["YOUTUBE_COOKIE"];
+  logger.info({ hasCookie: !!cookie }, "Initializing Innertube client");
+  client = await Innertube.create(cookie ? { cookie } : {});
   clientCreatedAt = Date.now();
   logger.info("Innertube client ready");
   return client;
