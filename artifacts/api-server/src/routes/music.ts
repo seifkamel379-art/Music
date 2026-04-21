@@ -16,6 +16,9 @@ const INVIDIOUS_INSTANCES = [
   "https://invidious.privacydev.net",
   "https://yt.artemislena.eu",
   "https://invidious.fdn.fr",
+  "https://invidious.projectsegfau.lt",
+  "https://invidious.flokinet.to",
+  "https://vid.puffyan.us",
 ];
 
 /* ── URL cache (CDN URLs are valid ~6 hours) ───────────────────────────── */

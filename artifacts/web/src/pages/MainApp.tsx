@@ -180,54 +180,22 @@ export default function MainApp({ userName, onLogout }: Props) {
     showToast("جارٍ تحضير التحميل...");
 
     try {
-      // Step 1: Try to get a direct CDN URL from server (fast path)
-      const urlRes = await fetch(
-        `/api/music/url?id=${encodeURIComponent(track.videoId)}`,
-        { signal: AbortSignal.timeout(25000) }
-      ).catch(() => null);
-
-      if (urlRes && urlRes.ok) {
-        const { url } = await urlRes.json().catch(() => ({}));
-        if (url) {
-          // Try browser fetch+blob (may fail due to CORS on googlevideo.com)
-          const blobResp = await fetch(url).catch(() => null);
-          if (blobResp && blobResp.ok) {
-            const blob = await blobResp.blob();
-            const blobUrl = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = blobUrl;
-            a.download = `${track.title}.m4a`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
-            showToast("تم التحميل!");
-            return;
-          }
-          // CORS blocked: use server download as proxy
-          const dlUrl = `/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`;
-          const a = document.createElement("a");
-          a.href = dlUrl;
-          a.download = `${track.title}.mp3`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          showToast("بدأ التحميل...");
-          return;
-        }
-      }
-
-      // Last resort: open YouTube
-      showToast("تعذّر التحميل — جارٍ فتح YouTube...");
-      setTimeout(() => {
-        window.open(`https://www.youtube.com/watch?v=${track.videoId}`, "_blank");
-      }, 1000);
+      const dlUrl = `/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`;
+      const a = document.createElement("a");
+      a.href = dlUrl;
+      a.download = `${track.title}.m4a`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      showToast("بدأ التحميل...");
     } finally {
-      setDownloadingIds(prev => {
-        const next = new Set(prev);
-        next.delete(track.videoId);
-        return next;
-      });
+      setTimeout(() => {
+        setDownloadingIds(prev => {
+          const next = new Set(prev);
+          next.delete(track.videoId);
+          return next;
+        });
+      }, 3000);
     }
   }
 
