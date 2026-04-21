@@ -22,6 +22,21 @@ function fmtDuration(seconds: number): string {
   return `${Math.floor(n / 60)}:${(n % 60).toString().padStart(2, "0")}`;
 }
 
+function bestThumbnail(thumbnails: Array<{ url?: string; width?: number }> | undefined, videoId: string): string {
+  if (thumbnails && thumbnails.length > 0) {
+    const sorted = [...thumbnails].sort((a, b) => (b.width ?? 0) - (a.width ?? 0));
+    const best = sorted[0]?.url;
+    if (best) return best;
+  }
+  return `https://i.ytimg.com/vi/${videoId}/sddefault.jpg`;
+}
+
+function cookieArgs(): string[] {
+  const cookie = process.env["YOUTUBE_COOKIE"];
+  if (cookie) return ["--add-header", `Cookie:${cookie}`];
+  return [];
+}
+
 export type TrackMeta = {
   videoId: string;
   title: string;
@@ -57,8 +72,7 @@ export async function searchTracks(query: string): Promise<TrackMeta[]> {
         item.duration?.text
         ?? (item.duration?.seconds != null ? fmtDuration(item.duration.seconds) : "0:00");
 
-      const thumb: string =
-        item.thumbnails?.[0]?.url ?? `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+      const thumb: string = bestThumbnail(item.thumbnails, id);
 
       items.push({ videoId: id, title, artist: artistRaw, duration: durationRaw, thumbnail: thumb });
       if (items.length >= 20) break;
@@ -85,8 +99,7 @@ export async function searchTracks(query: string): Promise<TrackMeta[]> {
       v.author?.name ?? v.short_byline_text?.runs?.[0]?.text ?? "فنان غير معروف";
     const duration: string =
       v.length_text?.text ?? fmtDuration(v.duration?.seconds ?? 0);
-    const thumb: string =
-      v.thumbnails?.[0]?.url ?? `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+    const thumb: string = bestThumbnail(v.thumbnails, id);
     items.push({ videoId: id, title, artist, duration, thumbnail: thumb });
     if (items.length >= 20) break;
   }
@@ -109,6 +122,7 @@ export function getAudioUrl(videoId: string): Promise<string | null> {
       "--no-playlist",
       "--extractor-args", "youtube:player_client=android_vr",
       "-f", "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
+      ...cookieArgs(),
       "--get-url",
       `https://www.youtube.com/watch?v=${videoId}`,
     ];
@@ -166,6 +180,7 @@ export function getAudioStream(videoId: string): {
     "--no-playlist",
     "--extractor-args", "youtube:player_client=android_vr",
     "-f", "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
+    ...cookieArgs(),
     "-o", "-",
     `https://www.youtube.com/watch?v=${videoId}`,
   ];
