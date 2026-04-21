@@ -3,7 +3,7 @@ import { z } from "zod/v4";
 import { type Readable } from "stream";
 import type { Request, Response, NextFunction } from "express";
 import { logger } from "../lib/logger";
-import { searchTracks, getAudioStream, getAudioUrl } from "../lib/innertube";
+import { searchTracks, getAudioStream } from "../lib/innertube";
 
 const router: IRouter = Router();
 const PASSWORD = "80801616";
@@ -20,22 +20,6 @@ const INVIDIOUS_INSTANCES = [
   "https://invidious.flokinet.to",
   "https://vid.puffyan.us",
 ];
-
-/* ── URL cache (CDN URLs are valid ~6 hours) ───────────────────────────── */
-const urlCache = new Map<string, { url: string; time: number }>();
-const URL_TTL = 4 * 60 * 60 * 1000;
-
-function getCachedUrl(videoId: string): string | null {
-  const c = urlCache.get(videoId);
-  return c && Date.now() - c.time < URL_TTL ? c.url : null;
-}
-function setCachedUrl(videoId: string, url: string) {
-  if (urlCache.size >= 200) {
-    const [k] = [...urlCache.entries()].sort((a, b) => a[1].time - b[1].time)[0];
-    urlCache.delete(k);
-  }
-  urlCache.set(videoId, { url, time: Date.now() });
-}
 
 /* ── Search cache ───────────────────────────────────────────────────────── */
 const searchCache = new Map<string, { data: any[]; time: number }>();
@@ -79,34 +63,7 @@ router.get("/music/search", async (req: Request, res: Response, next: NextFuncti
   }
 });
 
-/* ── URL endpoint (returns direct CDN URL for browser playback) ─────────── */
-router.get("/music/url", async (req: Request, res: Response, next: NextFunction) => {
-  const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
-  if (!id) { res.status(400).json({ message: "Missing id" }); return; }
-
-  try {
-    const cached = getCachedUrl(id);
-    if (cached) {
-      res.json({ url: cached });
-      return;
-    }
-
-    const url = await getAudioUrl(id);
-    if (!url) {
-      res.status(503).json({ message: "Could not resolve audio URL" });
-      return;
-    }
-
-    setCachedUrl(id, url);
-    res.setHeader("Cache-Control", "no-cache");
-    res.json({ url });
-  } catch (e) {
-    logger.error({ err: e, id }, "URL resolution failed");
-    next(e);
-  }
-});
-
-/* ── Helpers ─────────────────────────────────────────────────────────────── */
+/* ── Stream resolution helpers ───────────────────────────────────────────── */
 
 type StreamResult = {
   stream: Readable;
@@ -147,26 +104,28 @@ async function tryInvidious(videoId: string): Promise<StreamResult | null> {
   return null;
 }
 
-/** Resolve stream: Innertube first, Invidious fallback. No yt-dlp needed. */
-async function resolveStream(videoId: string): Promise<StreamResult> {
+/** Resolve stream: Innertube first, Invidious fallback. */
+async function resolveStream(videoId: string): Promise<StreamResult | null> {
   const innertubeResult = await getAudioStream(videoId);
   if (innertubeResult) {
     logger.info({ videoId }, "Streaming via Innertube");
     return innertubeResult;
   }
   logger.warn({ videoId }, "Innertube stream failed, trying Invidious proxy");
-  const invResult = await tryInvidious(videoId);
-  if (invResult) return invResult;
-  throw new Error("All stream sources failed for " + videoId);
+  return tryInvidious(videoId);
 }
 
-/* ── Stream endpoint (server proxy fallback) ────────────────────────────── */
+/* ── Stream endpoint (used as in-browser playback fallback if needed) ────── */
 router.get("/music/stream", async (req: Request, res: Response, next: NextFunction) => {
   const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
   if (!id) { res.status(400).json({ message: "Missing id" }); return; }
 
   try {
     const result = await resolveStream(id);
+    if (!result) {
+      res.status(503).json({ message: "Stream unavailable" });
+      return;
+    }
 
     res.setHeader("Content-Type", result.contentType);
     res.setHeader("Cache-Control", "no-cache, no-store");
@@ -179,29 +138,48 @@ router.get("/music/stream", async (req: Request, res: Response, next: NextFuncti
     result.stream.on("error", () => { if (!res.writableEnded) res.end(); });
   } catch (e) {
     logger.error({ err: e, id }, "Stream failed");
-    if (!res.headersSent) next(e); else if (!res.writableEnded) res.end();
+    if (!res.headersSent) res.status(503).json({ message: "Stream unavailable" });
+    else if (!res.writableEnded) res.end();
   }
 });
 
 /* ── Download endpoint ──────────────────────────────────────────────────── */
+
+/** Strip only filesystem-illegal chars; keep spaces, Arabic, dashes, parens. */
+function makeSafeFilename(rawTitle: string): string {
+  const cleaned = rawTitle
+    .replace(/[\/\\:*?"<>|\x00-\x1f]/g, "") // illegal on Windows/POSIX
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 150);
+  return cleaned || "track";
+}
+
 router.get("/music/download", async (req: Request, res: Response, next: NextFunction) => {
   const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
   const rawTitle = typeof req.query.title === "string" ? req.query.title.trim() : "track";
   if (!id) { res.status(400).json({ message: "Missing id" }); return; }
 
-  const safeTitle = rawTitle
-    .replace(/[^\w\u0600-\u06FF\s\-().]/g, "").trim()
-    .replace(/\s+/g, "_").slice(0, 120) || `track-${id}`;
+  const safeTitle = makeSafeFilename(rawTitle);
 
   try {
+    // Resolve BEFORE setting any download headers, so a failure returns clean JSON
+    // instead of an HTML error page that the browser would save as a file.
     const result = await resolveStream(id);
+    if (!result) {
+      res.status(503).json({ message: "Download unavailable" });
+      return;
+    }
 
     const ext = result.contentType.includes("webm") ? "webm"
       : result.contentType.includes("mp4") ? "m4a" : "mp3";
     const dlFilename = `${safeTitle}.${ext}`;
 
     res.setHeader("Content-Type", result.contentType);
-    res.setHeader("Content-Disposition", `attachment; filename="track.${ext}"; filename*=UTF-8''${encodeURIComponent(dlFilename)}`);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${safeTitle.replace(/"/g, "")}.${ext}"; filename*=UTF-8''${encodeURIComponent(dlFilename)}`,
+    );
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Access-Control-Allow-Origin", "*");
     if (typeof res.flushHeaders === "function") res.flushHeaders();
@@ -211,7 +189,8 @@ router.get("/music/download", async (req: Request, res: Response, next: NextFunc
     result.stream.on("error", () => { if (!res.writableEnded) res.end(); });
   } catch (e) {
     logger.error({ err: e, id }, "Download failed");
-    if (!res.headersSent) next(e); else if (!res.writableEnded) res.end();
+    if (!res.headersSent) res.status(503).json({ message: "Download unavailable" });
+    else if (!res.writableEnded) res.end();
   }
 });
 
