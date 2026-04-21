@@ -184,22 +184,15 @@ export default function MainApp({ userName, onLogout }: Props) {
     setDownloadingIds(prev => new Set([...prev, track.videoId]));
 
     try {
-      const ytUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(track.videoId)}`;
-      const loaderUrl = `https://loader.to/api/button/?url=${encodeURIComponent(ytUrl)}&f=mp3&color=1DB954`;
-      const w = 420;
-      const h = 320;
-      const left = Math.max(0, (window.screen.width - w) / 2);
-      const top = Math.max(0, (window.screen.height - h) / 2);
-      const popup = window.open(
-        loaderUrl,
-        "seif_dl_" + track.videoId,
-        `popup=yes,width=${w},height=${h},left=${left},top=${top},noopener,noreferrer`
-      );
-      if (!popup) {
-        // popup blocked → fall back to a new tab
-        window.open(loaderUrl, "_blank", "noopener,noreferrer");
-      }
-      showToast("تم فتح نافذة التحميل");
+      showToast("جارٍ تحضير التحميل...");
+      const dlUrl = `/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`;
+      const a = document.createElement("a");
+      a.href = dlUrl;
+      a.download = `${track.title}.mp3`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      showToast("بدأ التحميل");
     } catch (e) {
       console.error("[download] error:", e);
       showToast("فشل التحميل، جرب مرة أخرى");
