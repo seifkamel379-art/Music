@@ -33,6 +33,51 @@ router.post("/music/login", (req, res) => {
   res.json({ ok: true, name: p.data.name });
 });
 
+/* ── Download (via loader.to public converter) ──────────────────────────── */
+router.get("/music/download", async (req: Request, res: Response) => {
+  const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
+  if (!id) { res.status(400).json({ message: "Missing id" }); return; }
+
+  const ytUrl = `https://youtu.be/${id}`;
+  try {
+    const startRes = await fetch(
+      `https://loader.to/ajax/download.php?format=mp3&url=${encodeURIComponent(ytUrl)}`,
+      { signal: AbortSignal.timeout(15000) },
+    );
+    const start = await startRes.json() as { success?: boolean; id?: string };
+    if (!start.success || !start.id) {
+      logger.warn({ id, start }, "loader.to start failed");
+      res.status(503).json({ message: "Download service unavailable" });
+      return;
+    }
+
+    const jobId = start.id;
+    // Poll up to ~90s
+    for (let i = 0; i < 45; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      try {
+        const pr = await fetch(
+          `https://loader.to/ajax/progress.php?id=${encodeURIComponent(jobId)}`,
+          { signal: AbortSignal.timeout(8000) },
+        );
+        const data = await pr.json() as { progress?: number; download_url?: string | null };
+        if (data.progress === 1000 && data.download_url) {
+          logger.info({ id, jobId }, "loader.to download ready");
+          res.json({ url: data.download_url });
+          return;
+        }
+      } catch (e) {
+        logger.warn({ err: e, id, jobId }, "loader.to poll error");
+      }
+    }
+    logger.warn({ id, jobId }, "loader.to timeout");
+    res.status(504).json({ message: "Download preparation timed out" });
+  } catch (e) {
+    logger.error({ err: e, id }, "Download failed");
+    res.status(503).json({ message: "Download service unavailable" });
+  }
+});
+
 /* ── Search ─────────────────────────────────────────────────────────────── */
 router.get("/music/search", async (req: Request, res: Response, next: NextFunction) => {
   try {

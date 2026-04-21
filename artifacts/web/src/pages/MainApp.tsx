@@ -185,21 +185,34 @@ export default function MainApp({ userName, onLogout }: Props) {
     setDownloadingIds(prev => new Set([...prev, track.videoId]));
 
     try {
-      const ytUrl = `https://www.youtube.com/watch?v=${track.videoId}`;
-      const cobaltUrl = `https://cobalt.tools/?url=${encodeURIComponent(ytUrl)}`;
-      window.open(cobaltUrl, "_blank", "noopener,noreferrer");
-      showToast("افتح صفحة التحميل واضغط Download");
+      showToast("جارٍ تحضير التحميل...");
+      const res = await fetch(`/api/music/download?id=${encodeURIComponent(track.videoId)}`);
+      if (!res.ok) {
+        showToast("فشل تحضير الملف، جرّب تاني");
+        return;
+      }
+      const data = await res.json() as { url?: string };
+      if (!data.url) {
+        showToast("فشل تحضير الملف");
+        return;
+      }
+      const a = document.createElement("a");
+      a.href = data.url;
+      a.download = `${track.title}.mp3`;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      showToast("بدأ التحميل");
     } catch (e) {
       console.error("[download] error:", e);
-      showToast("فشل فتح صفحة التحميل");
+      showToast("فشل التحميل، جرّب تاني");
     } finally {
-      setTimeout(() => {
-        setDownloadingIds(prev => {
-          const next = new Set(prev);
-          next.delete(track.videoId);
-          return next;
-        });
-      }, 1500);
+      setDownloadingIds(prev => {
+        const next = new Set(prev);
+        next.delete(track.videoId);
+        return next;
+      });
     }
   }
 
