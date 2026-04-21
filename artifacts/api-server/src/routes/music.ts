@@ -1,12 +1,23 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod/v4";
 import { spawn } from "child_process";
+import { PassThrough, type Readable } from "stream";
 import type { Request, Response, NextFunction } from "express";
 import { logger } from "../lib/logger";
 import { searchTracks, getAudioStream } from "../lib/innertube";
 
 const router: IRouter = Router();
 const PASSWORD = "80801616";
+
+const INVIDIOUS_INSTANCES = [
+  "https://inv.nadeko.net",
+  "https://invidious.io.lol",
+  "https://invidious.nerdvpn.de",
+  "https://iv.ggtyler.dev",
+  "https://invidious.privacydev.net",
+  "https://yt.artemislena.eu",
+  "https://invidious.fdn.fr",
+];
 
 /* ── Search cache ───────────────────────────────────────────────────────── */
 const searchCache = new Map<string, { data: any[]; time: number }>();
@@ -39,10 +50,8 @@ router.get("/music/search", async (req: Request, res: Response, next: NextFuncti
   try {
     const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
     if (!q) { res.json([]); return; }
-
     const cached = getCached(q);
     if (cached) { res.json(cached); return; }
-
     const tracks = await searchTracks(q);
     setCache(q, tracks);
     res.json(tracks);
@@ -52,81 +61,147 @@ router.get("/music/search", async (req: Request, res: Response, next: NextFuncti
   }
 });
 
-/* ── Core: yt-dlp → ffmpeg → MP3 ───────────────────────────────────────── */
-function streamMp3(
-  res: Response,
-  videoId: string,
-  bitrate: "128k" | "192k",
-  onHeaders: () => void,
-  next: NextFunction,
-) {
-  const source = getAudioStream(videoId);
+/* ── Helpers ─────────────────────────────────────────────────────────────── */
 
-  const ff = spawn("ffmpeg", [
-    "-i", "pipe:0",
-    "-vn", "-ar", "44100", "-ac", "2",
-    "-b:a", bitrate, "-f", "mp3", "-",
-  ], { stdio: ["pipe", "pipe", "pipe"] });
+type StreamResult = {
+  stream: Readable;
+  contentType: string;
+  cleanup: () => void;
+};
 
-  let ffmpegStderr = "";
-  let ytdlpStderr = "";
-  let sentAudio = false;
-  let closed = false;
+/** Try yt-dlp (iOS client). Resolves with stream on first bytes, null on failure. */
+function tryYtdlp(videoId: string, ffmpegBitrate: "128k" | "192k"): Promise<StreamResult | null> {
+  return new Promise(resolve => {
+    const source = getAudioStream(videoId);
+    const ff = spawn("ffmpeg", [
+      "-i", "pipe:0",
+      "-vn", "-ar", "44100", "-ac", "2",
+      "-b:a", ffmpegBitrate, "-f", "mp3", "-",
+    ], { stdio: ["pipe", "pipe", "pipe"] });
 
-  const cleanup = () => {
-    if (closed) return;
-    closed = true;
-    source.kill();
-    try { ff.kill("SIGKILL"); } catch {}
-  };
+    let settled = false;
+    let ffmpegStderr = "";
+    let ytdlpStderr = "";
 
-  source.stderr.on("data", (chunk: Buffer) => {
-    ytdlpStderr = `${ytdlpStderr}${chunk}`.slice(-3000);
-  });
-  ff.stderr.on("data", chunk => {
-    ffmpegStderr = `${ffmpegStderr}${chunk}`.slice(-2000);
-  });
-  source.stdout.on("error", e => {
-    logger.error({ err: e, videoId }, "yt-dlp stdout error");
-    cleanup();
-    if (!res.writableEnded) res.end();
-  });
-  ff.on("error", e => {
-    logger.error({ err: e, videoId }, "ffmpeg process failed");
-    if (!res.headersSent) next(e); else if (!res.writableEnded) res.end();
-  });
-  ff.stdin.on("error", () => {});
+    const cleanup = () => {
+      source.kill();
+      try { ff.kill("SIGKILL"); } catch {}
+    };
 
-  onHeaders();
-  if (typeof res.flushHeaders === "function") res.flushHeaders();
+    const fail = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(null);
+    };
 
-  source.stdout.pipe(ff.stdin);
-  res.on("close", cleanup);
+    const timeout = setTimeout(fail, 9000);
 
-  ff.stdout.on("data", chunk => { sentAudio = true; res.write(chunk); });
-  ff.stdout.on("end", () => { if (!res.writableEnded) res.end(); });
-  ff.on("close", code => {
-    if (!sentAudio) {
-      logger.error({ code, videoId, ytdlpStderr, ffmpegStderr }, "No audio output");
-    }
-    if (!res.writableEnded) res.end();
+    source.stderr.on("data", (c: Buffer) => { ytdlpStderr = `${ytdlpStderr}${c}`.slice(-2000); });
+    ff.stderr.on("data", (c: Buffer) => { ffmpegStderr = `${ffmpegStderr}${c}`.slice(-2000); });
+    ff.stdin.on("error", () => {});
+    source.stdout.on("error", fail);
+    ff.on("error", fail);
+
+    source.stdout.pipe(ff.stdin);
+
+    ff.stdout.once("data", (firstChunk: Buffer) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+
+      const pass = new PassThrough();
+      pass.write(firstChunk);
+      ff.stdout.pipe(pass);
+
+      resolve({
+        stream: pass,
+        contentType: "audio/mpeg",
+        cleanup,
+      });
+    });
+
+    ff.on("close", code => {
+      clearTimeout(timeout);
+      if (!settled) {
+        logger.warn({ code, videoId, ytdlpStderr, ffmpegStderr }, "yt-dlp/ffmpeg exited with no output");
+        fail();
+      }
+    });
   });
 }
 
+/** Try Invidious instances for a proxied audio stream. */
+async function tryInvidious(videoId: string): Promise<StreamResult | null> {
+  for (const instance of INVIDIOUS_INSTANCES) {
+    try {
+      const metaRes = await fetch(
+        `${instance}/api/v1/videos/${encodeURIComponent(videoId)}?fields=adaptiveFormats`,
+        { signal: AbortSignal.timeout(6000) },
+      );
+      if (!metaRes.ok) continue;
+
+      const data = await metaRes.json() as { adaptiveFormats?: Array<{ itag: number; type: string }> };
+      const formats = data.adaptiveFormats ?? [];
+      const mp4 = formats.find(f => f.type?.startsWith("audio/mp4"));
+      const webm = formats.find(f => f.type?.startsWith("audio/webm"));
+      const chosen = mp4 ?? webm;
+      if (!chosen?.itag) continue;
+
+      const streamUrl = `${instance}/latest_version?id=${encodeURIComponent(videoId)}&itag=${chosen.itag}`;
+      const streamRes = await fetch(streamUrl, { signal: AbortSignal.timeout(10000) });
+      if (!streamRes.ok || !streamRes.body) continue;
+
+      const contentType = streamRes.headers.get("content-type") ?? "audio/mp4";
+      const readable = Readable.fromWeb(streamRes.body as any);
+
+      logger.info({ videoId, instance }, "Invidious proxy stream OK");
+      return { stream: readable, contentType, cleanup: () => {} };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+/** Resolve stream source: yt-dlp first, Invidious fallback. */
+async function resolveStream(videoId: string, bitrate: "128k" | "192k"): Promise<StreamResult> {
+  const ytdlpResult = await tryYtdlp(videoId, bitrate);
+  if (ytdlpResult) {
+    logger.info({ videoId }, "Streaming via yt-dlp (iOS client)");
+    return ytdlpResult;
+  }
+  logger.warn({ videoId }, "yt-dlp failed, trying Invidious proxy");
+  const invResult = await tryInvidious(videoId);
+  if (invResult) return invResult;
+  throw new Error("All stream sources failed for " + videoId);
+}
+
 /* ── Stream endpoint ────────────────────────────────────────────────────── */
-router.get("/music/stream", (req: Request, res: Response, next: NextFunction) => {
+router.get("/music/stream", async (req: Request, res: Response, next: NextFunction) => {
   const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
   if (!id) { res.status(400).json({ message: "Missing id" }); return; }
-  streamMp3(res, id, "128k", () => {
-    res.setHeader("Content-Type", "audio/mpeg");
+
+  try {
+    const result = await resolveStream(id, "128k");
+
+    res.setHeader("Content-Type", result.contentType);
     res.setHeader("Cache-Control", "no-cache, no-store");
     res.setHeader("Accept-Ranges", "none");
     res.setHeader("Access-Control-Allow-Origin", "*");
-  }, next);
+    if (typeof res.flushHeaders === "function") res.flushHeaders();
+
+    res.on("close", result.cleanup);
+    result.stream.pipe(res);
+    result.stream.on("error", () => { if (!res.writableEnded) res.end(); });
+  } catch (e) {
+    logger.error({ err: e, id }, "Stream failed");
+    if (!res.headersSent) next(e); else if (!res.writableEnded) res.end();
+  }
 });
 
 /* ── Download endpoint ──────────────────────────────────────────────────── */
-router.get("/music/download", (req: Request, res: Response, next: NextFunction) => {
+router.get("/music/download", async (req: Request, res: Response, next: NextFunction) => {
   const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
   const rawTitle = typeof req.query.title === "string" ? req.query.title.trim() : "track";
   if (!id) { res.status(400).json({ message: "Missing id" }); return; }
@@ -136,12 +211,26 @@ router.get("/music/download", (req: Request, res: Response, next: NextFunction) 
     .replace(/\s+/g, "_").slice(0, 120) || `track-${id}`;
   const filename = `${safeTitle}.mp3`;
 
-  streamMp3(res, id, "192k", () => {
-    res.setHeader("Content-Type", "audio/mpeg");
-    res.setHeader("Content-Disposition", `attachment; filename="track.mp3"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  try {
+    const result = await resolveStream(id, "192k");
+
+    const ext = result.contentType.includes("webm") ? "webm"
+      : result.contentType.includes("mp4") ? "m4a" : "mp3";
+    const dlFilename = result.contentType === "audio/mpeg" ? filename : `${safeTitle}.${ext}`;
+
+    res.setHeader("Content-Type", result.contentType);
+    res.setHeader("Content-Disposition", `attachment; filename="track.${ext}"; filename*=UTF-8''${encodeURIComponent(dlFilename)}`);
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Access-Control-Allow-Origin", "*");
-  }, next);
+    if (typeof res.flushHeaders === "function") res.flushHeaders();
+
+    res.on("close", result.cleanup);
+    result.stream.pipe(res);
+    result.stream.on("error", () => { if (!res.writableEnded) res.end(); });
+  } catch (e) {
+    logger.error({ err: e, id }, "Download failed");
+    if (!res.headersSent) next(e); else if (!res.writableEnded) res.end();
+  }
 });
 
 export default router;

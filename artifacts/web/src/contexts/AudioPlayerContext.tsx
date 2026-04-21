@@ -129,14 +129,40 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     setStatus({ playing: false, currentTime: 0, duration: 0, isBuffering: true });
     updateMediaSession(track, false);
 
-    try {
-      const src = track.localUrl ?? await resolveAudioUrl(track.videoId);
+    if (track.localUrl) {
+      audio.src = track.localUrl;
+      audio.load();
+      audio.play().catch(() => {});
+      return;
+    }
+
+    const serverUrl = `/api/music/stream?id=${encodeURIComponent(track.videoId)}`;
+
+    const tryPlay = (src: string, onFail?: () => void) => {
+      const onError = () => {
+        audio.removeEventListener("error", onError);
+        if (onFail) onFail();
+        else setStatus(s => ({ ...s, isBuffering: false, playing: false }));
+      };
+      audio.addEventListener("error", onError, { once: true });
       audio.src = src;
       audio.load();
       audio.play().catch(() => {});
+    };
+
+    try {
+      const invidiousUrl = await resolveAudioUrl(track.videoId);
+      if (invidiousUrl) {
+        tryPlay(invidiousUrl, () => {
+          console.warn("[player] Invidious failed, falling back to server stream");
+          tryPlay(serverUrl);
+        });
+      } else {
+        tryPlay(serverUrl);
+      }
     } catch (e) {
       console.error("Failed to resolve audio URL", e);
-      setStatus(s => ({ ...s, isBuffering: false, playing: false }));
+      tryPlay(serverUrl);
     }
   }
 
