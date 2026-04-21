@@ -1,5 +1,4 @@
 import { Innertube } from "youtubei.js";
-import { Readable } from "stream";
 import { logger } from "./logger";
 
 let client: Innertube | null = null;
@@ -8,9 +7,8 @@ const TTL = 55 * 60 * 1000;
 
 export async function getClient(): Promise<Innertube> {
   if (client && Date.now() - clientCreatedAt < TTL) return client;
-  const cookie = process.env["YOUTUBE_COOKIE"];
-  logger.info({ hasCookie: !!cookie }, "Initializing Innertube client");
-  client = await Innertube.create(cookie ? { cookie } : {});
+  logger.info("Initializing Innertube client");
+  client = await Innertube.create({});
   clientCreatedAt = Date.now();
   logger.info("Innertube client ready");
   return client;
@@ -114,26 +112,3 @@ export async function searchTracks(query: string): Promise<TrackMeta[]> {
   return items;
 }
 
-/* ── Audio stream via local Innertube download() ─────────────────────────── */
-export async function getAudioStream(videoId: string): Promise<{
-  stream: Readable;
-  contentType: string;
-  cleanup: () => void;
-} | null> {
-  const clients = ["IOS", "ANDROID"] as const;
-  for (const clientType of clients) {
-    try {
-      logger.info({ videoId, clientType }, "Innertube download() streaming");
-      const yt = await getClient();
-      const webStream = await yt.download(videoId, { type: "audio", quality: "best", client: clientType });
-      const readable = Readable.fromWeb(webStream as any);
-      logger.info({ videoId, clientType }, "Innertube download() OK");
-      return { stream: readable, contentType: "audio/mp4", cleanup: () => { readable.destroy(); } };
-    } catch (e) {
-      logger.warn({ err: e, videoId, clientType }, "Innertube download() failed");
-    }
-  }
-
-  logger.warn({ videoId }, "All Innertube clients failed, caller will try Invidious");
-  return null;
-}
