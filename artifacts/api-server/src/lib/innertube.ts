@@ -33,7 +33,6 @@ export type TrackMeta = {
 export async function searchTracks(query: string): Promise<TrackMeta[]> {
   const yt = await getClient();
 
-  /* ── YouTube Music search (songs first) ──────────────────────────────── */
   try {
     const musicResults = await yt.music.search(query, { type: "song" });
     const contents: any[] =
@@ -46,8 +45,7 @@ export async function searchTracks(query: string): Promise<TrackMeta[]> {
       const id: string = item.id ?? item.video_id ?? "";
       if (!id) continue;
 
-      const title: string =
-        item.title ?? item.name ?? "بدون عنوان";
+      const title: string = item.title ?? item.name ?? "بدون عنوان";
 
       const artistRaw = item.artists?.[0]?.name
         ?? item.author?.name
@@ -75,7 +73,6 @@ export async function searchTracks(query: string): Promise<TrackMeta[]> {
     logger.warn({ err: e, query }, "YT Music search failed, falling back to YT");
   }
 
-  /* ── Fallback: regular YouTube search ───────────────────────────────── */
   const results = await yt.search(query, { type: "video" });
   const videos = (results as any)?.videos ?? [];
   const items: TrackMeta[] = [];
@@ -97,11 +94,63 @@ export async function searchTracks(query: string): Promise<TrackMeta[]> {
   return items;
 }
 
-/* ── yt-dlp audio stream (iOS client, no cookies) ────────────────────────
+/* ── yt-dlp: get direct CDN URL (android_vr client) ─────────────────────
  *
- * iOS player client returns HLS audio streams (formats 233/234) that work
- * even from datacenter IPs. No cookies needed — passing cookies with the
- * iOS client causes YouTube to return storyboards instead of audio.
+ * android_vr client bypasses bot-check and returns a signed YouTube CDN URL.
+ * The URL can be played directly from the user's browser (no server proxy needed).
+ */
+export function getAudioUrl(videoId: string): Promise<string | null> {
+  return new Promise(resolve => {
+    const args = [
+      "--no-warnings",
+      "--no-check-certificate",
+      "--geo-bypass",
+      "--socket-timeout", "20",
+      "--no-playlist",
+      "--extractor-args", "youtube:player_client=android_vr",
+      "-f", "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
+      "--get-url",
+      `https://www.youtube.com/watch?v=${videoId}`,
+    ];
+
+    logger.info({ videoId }, "yt-dlp resolving URL via android_vr client");
+
+    const proc = spawn("yt-dlp", args, { stdio: ["pipe", "pipe", "pipe"] });
+
+    let output = "";
+    let errOutput = "";
+
+    const timeout = setTimeout(() => {
+      try { proc.kill("SIGKILL"); } catch {}
+      logger.warn({ videoId }, "yt-dlp android_vr URL resolution timed out");
+      resolve(null);
+    }, 20000);
+
+    proc.stdout.on("data", (d: Buffer) => { output += d.toString(); });
+    proc.stderr.on("data", (d: Buffer) => { errOutput = `${errOutput}${d}`.slice(-1000); });
+
+    proc.on("close", code => {
+      clearTimeout(timeout);
+      const url = output.trim().split("\n")[0].trim();
+      if (code === 0 && url.startsWith("http")) {
+        logger.info({ videoId }, "yt-dlp android_vr URL OK");
+        resolve(url);
+      } else {
+        logger.warn({ videoId, code, errOutput }, "yt-dlp android_vr URL failed");
+        resolve(null);
+      }
+    });
+
+    proc.on("error", () => {
+      clearTimeout(timeout);
+      resolve(null);
+    });
+  });
+}
+
+/* ── yt-dlp audio stream (android_vr client, no cookies) ────────────────
+ *
+ * Used as fallback when direct URL playback fails — streams via server.
  */
 export function getAudioStream(videoId: string): {
   stdout: Readable;
@@ -115,13 +164,13 @@ export function getAudioStream(videoId: string): {
     "--socket-timeout", "20",
     "--no-update",
     "--no-playlist",
-    "--extractor-args", "youtube:player_client=ios",
-    "-f", "234/233",
+    "--extractor-args", "youtube:player_client=android_vr",
+    "-f", "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
     "-o", "-",
     `https://www.youtube.com/watch?v=${videoId}`,
   ];
 
-  logger.info({ videoId }, "yt-dlp streaming via iOS client (no cookies)");
+  logger.info({ videoId }, "yt-dlp streaming via android_vr client");
 
   const proc = spawn("yt-dlp", args, { stdio: ["pipe", "pipe", "pipe"] });
 

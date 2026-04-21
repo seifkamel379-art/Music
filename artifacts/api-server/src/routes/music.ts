@@ -4,7 +4,7 @@ import { spawn } from "child_process";
 import { PassThrough, type Readable } from "stream";
 import type { Request, Response, NextFunction } from "express";
 import { logger } from "../lib/logger";
-import { searchTracks, getAudioStream } from "../lib/innertube";
+import { searchTracks, getAudioStream, getAudioUrl } from "../lib/innertube";
 
 const router: IRouter = Router();
 const PASSWORD = "80801616";
@@ -18,6 +18,22 @@ const INVIDIOUS_INSTANCES = [
   "https://yt.artemislena.eu",
   "https://invidious.fdn.fr",
 ];
+
+/* ── URL cache (CDN URLs are valid ~6 hours) ───────────────────────────── */
+const urlCache = new Map<string, { url: string; time: number }>();
+const URL_TTL = 4 * 60 * 60 * 1000;
+
+function getCachedUrl(videoId: string): string | null {
+  const c = urlCache.get(videoId);
+  return c && Date.now() - c.time < URL_TTL ? c.url : null;
+}
+function setCachedUrl(videoId: string, url: string) {
+  if (urlCache.size >= 200) {
+    const [k] = [...urlCache.entries()].sort((a, b) => a[1].time - b[1].time)[0];
+    urlCache.delete(k);
+  }
+  urlCache.set(videoId, { url, time: Date.now() });
+}
 
 /* ── Search cache ───────────────────────────────────────────────────────── */
 const searchCache = new Map<string, { data: any[]; time: number }>();
@@ -61,6 +77,33 @@ router.get("/music/search", async (req: Request, res: Response, next: NextFuncti
   }
 });
 
+/* ── URL endpoint (returns direct CDN URL for browser playback) ─────────── */
+router.get("/music/url", async (req: Request, res: Response, next: NextFunction) => {
+  const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
+  if (!id) { res.status(400).json({ message: "Missing id" }); return; }
+
+  try {
+    const cached = getCachedUrl(id);
+    if (cached) {
+      res.json({ url: cached });
+      return;
+    }
+
+    const url = await getAudioUrl(id);
+    if (!url) {
+      res.status(503).json({ message: "Could not resolve audio URL" });
+      return;
+    }
+
+    setCachedUrl(id, url);
+    res.setHeader("Cache-Control", "no-cache");
+    res.json({ url });
+  } catch (e) {
+    logger.error({ err: e, id }, "URL resolution failed");
+    next(e);
+  }
+});
+
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
 
 type StreamResult = {
@@ -69,23 +112,17 @@ type StreamResult = {
   cleanup: () => void;
 };
 
-/** Try yt-dlp (iOS client). Resolves with stream on first bytes, null on failure. */
-function tryYtdlp(videoId: string, ffmpegBitrate: "128k" | "192k"): Promise<StreamResult | null> {
+/** Try yt-dlp (android_vr client). Resolves with stream on first bytes, null on failure. */
+function tryYtdlp(videoId: string): Promise<StreamResult | null> {
   return new Promise(resolve => {
     const source = getAudioStream(videoId);
-    const ff = spawn("ffmpeg", [
-      "-i", "pipe:0",
-      "-vn", "-ar", "44100", "-ac", "2",
-      "-b:a", ffmpegBitrate, "-f", "mp3", "-",
-    ], { stdio: ["pipe", "pipe", "pipe"] });
+    const pass = new PassThrough();
 
     let settled = false;
-    let ffmpegStderr = "";
     let ytdlpStderr = "";
 
     const cleanup = () => {
       source.kill();
-      try { ff.kill("SIGKILL"); } catch {}
     };
 
     const fail = () => {
@@ -95,36 +132,26 @@ function tryYtdlp(videoId: string, ffmpegBitrate: "128k" | "192k"): Promise<Stre
       resolve(null);
     };
 
-    const timeout = setTimeout(fail, 9000);
+    const timeout = setTimeout(fail, 25000);
 
     source.stderr.on("data", (c: Buffer) => { ytdlpStderr = `${ytdlpStderr}${c}`.slice(-2000); });
-    ff.stderr.on("data", (c: Buffer) => { ffmpegStderr = `${ffmpegStderr}${c}`.slice(-2000); });
-    ff.stdin.on("error", () => {});
     source.stdout.on("error", fail);
-    ff.on("error", fail);
 
-    source.stdout.pipe(ff.stdin);
-
-    ff.stdout.once("data", (firstChunk: Buffer) => {
+    source.stdout.once("data", (firstChunk: Buffer) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
 
-      const pass = new PassThrough();
       pass.write(firstChunk);
-      ff.stdout.pipe(pass);
+      source.stdout.pipe(pass);
 
-      resolve({
-        stream: pass,
-        contentType: "audio/mpeg",
-        cleanup,
-      });
+      resolve({ stream: pass, contentType: "audio/mp4", cleanup });
     });
 
-    ff.on("close", code => {
+    source.stdout.on("close", () => {
       clearTimeout(timeout);
       if (!settled) {
-        logger.warn({ code, videoId, ytdlpStderr, ffmpegStderr }, "yt-dlp/ffmpeg exited with no output");
+        logger.warn({ videoId, ytdlpStderr }, "yt-dlp exited with no output");
         fail();
       }
     });
@@ -165,10 +192,10 @@ async function tryInvidious(videoId: string): Promise<StreamResult | null> {
 }
 
 /** Resolve stream source: yt-dlp first, Invidious fallback. */
-async function resolveStream(videoId: string, bitrate: "128k" | "192k"): Promise<StreamResult> {
-  const ytdlpResult = await tryYtdlp(videoId, bitrate);
+async function resolveStream(videoId: string): Promise<StreamResult> {
+  const ytdlpResult = await tryYtdlp(videoId);
   if (ytdlpResult) {
-    logger.info({ videoId }, "Streaming via yt-dlp (iOS client)");
+    logger.info({ videoId }, "Streaming via yt-dlp (android_vr)");
     return ytdlpResult;
   }
   logger.warn({ videoId }, "yt-dlp failed, trying Invidious proxy");
@@ -177,13 +204,13 @@ async function resolveStream(videoId: string, bitrate: "128k" | "192k"): Promise
   throw new Error("All stream sources failed for " + videoId);
 }
 
-/* ── Stream endpoint ────────────────────────────────────────────────────── */
+/* ── Stream endpoint (server proxy fallback) ────────────────────────────── */
 router.get("/music/stream", async (req: Request, res: Response, next: NextFunction) => {
   const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
   if (!id) { res.status(400).json({ message: "Missing id" }); return; }
 
   try {
-    const result = await resolveStream(id, "128k");
+    const result = await resolveStream(id);
 
     res.setHeader("Content-Type", result.contentType);
     res.setHeader("Cache-Control", "no-cache, no-store");
@@ -209,14 +236,13 @@ router.get("/music/download", async (req: Request, res: Response, next: NextFunc
   const safeTitle = rawTitle
     .replace(/[^\w\u0600-\u06FF\s\-().]/g, "").trim()
     .replace(/\s+/g, "_").slice(0, 120) || `track-${id}`;
-  const filename = `${safeTitle}.mp3`;
 
   try {
-    const result = await resolveStream(id, "192k");
+    const result = await resolveStream(id);
 
     const ext = result.contentType.includes("webm") ? "webm"
       : result.contentType.includes("mp4") ? "m4a" : "mp3";
-    const dlFilename = result.contentType === "audio/mpeg" ? filename : `${safeTitle}.${ext}`;
+    const dlFilename = `${safeTitle}.${ext}`;
 
     res.setHeader("Content-Type", result.contentType);
     res.setHeader("Content-Disposition", `attachment; filename="track.${ext}"; filename*=UTF-8''${encodeURIComponent(dlFilename)}`);
