@@ -30,6 +30,7 @@ type AudioPlayerCtx = {
 
 const Ctx = createContext<AudioPlayerCtx | null>(null);
 
+/* ── Media Session helper ─────────────────────────────────────────────────── */
 function updateMediaSession(track: Track | null, playing: boolean) {
   if (!("mediaSession" in navigator)) return;
   if (!track) { navigator.mediaSession.metadata = null; return; }
@@ -47,10 +48,72 @@ function updateMediaSession(track: Track | null, playing: boolean) {
   navigator.mediaSession.playbackState = playing ? "playing" : "paused";
 }
 
-function getStreamUrl(videoId: string) {
+/* ── Audio URL resolution ─────────────────────────────────────────────────── */
+const WORKER_URL = import.meta.env.VITE_WORKER_URL as string | undefined;
+const WORKER_KEY = import.meta.env.VITE_WORKER_AUTH_KEY as string | undefined;
+
+const urlCache = new Map<string, { url: string; ts: number }>();
+const URL_TTL = 3 * 60 * 60 * 1000; // 3 hours
+
+function getCached(videoId: string): string | null {
+  const c = urlCache.get(videoId);
+  return c && Date.now() - c.ts < URL_TTL ? c.url : null;
+}
+function setCached(videoId: string, url: string) {
+  urlCache.set(videoId, { url, ts: Date.now() });
+}
+
+async function resolveViaWorker(videoId: string): Promise<string | null> {
+  if (!WORKER_URL) return null;
+  try {
+    const url = new URL(`${WORKER_URL}/url`);
+    url.searchParams.set("id", videoId);
+    if (WORKER_KEY) url.searchParams.set("key", WORKER_KEY);
+    const res = await fetch(url.toString(), { signal: AbortSignal.timeout(12000) });
+    if (!res.ok) return null;
+    const data = await res.json() as { url?: string };
+    return data.url ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveViaApi(videoId: string): Promise<string | null> {
+  try {
+    const res = await fetch(`/api/music/url?id=${encodeURIComponent(videoId)}`, {
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { url?: string };
+    return data.url ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveAudioUrl(videoId: string): Promise<string> {
+  const cached = getCached(videoId);
+  if (cached) return cached;
+
+  const workerUrl = await resolveViaWorker(videoId);
+  if (workerUrl) {
+    setCached(videoId, workerUrl);
+    console.log("[player] using Worker URL for", videoId);
+    return workerUrl;
+  }
+
+  const apiUrl = await resolveViaApi(videoId);
+  if (apiUrl) {
+    setCached(videoId, apiUrl);
+    console.log("[player] using API URL for", videoId);
+    return apiUrl;
+  }
+
+  console.warn("[player] falling back to stream proxy for", videoId);
   return `/api/music/stream?id=${encodeURIComponent(videoId)}`;
 }
 
+/* ── Provider ─────────────────────────────────────────────────────────────── */
 export function AudioPlayerProvider({ children }: { children: React.ReactNode }) {
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [queue, setQueue] = useState<Track[]>([]);
@@ -123,10 +186,8 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     return audioRef.current;
   }, []);
 
-  // Media Session actions (registered once)
   useEffect(() => {
     if (!("mediaSession" in navigator)) return;
-
     navigator.mediaSession.setActionHandler("play", () => {
       audioRef.current?.play().catch(() => {});
     });
@@ -154,7 +215,6 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
 
   function loadAndPlay(track: Track) {
     const audio = getAudio();
-
     audio.pause();
     audio.src = "";
     audio.load();
@@ -163,11 +223,24 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     setStatus({ playing: false, currentTime: 0, duration: 0, isBuffering: true });
     updateMediaSession(track, false);
 
-    audio.src = track.localUrl ? track.localUrl : getStreamUrl(track.videoId);
-    audio.load();
-    audio.play().catch(e => {
-      console.error("[player] playback error:", e);
-      setStatus(s => ({ ...s, isBuffering: false, playing: false }));
+    if (track.localUrl) {
+      audio.src = track.localUrl;
+      audio.load();
+      audio.play().catch(e => {
+        console.error("[player] local playback error:", e);
+        setStatus(s => ({ ...s, isBuffering: false, playing: false }));
+      });
+      return;
+    }
+
+    resolveAudioUrl(track.videoId).then(src => {
+      if (currentTrackRef.current?.videoId !== track.videoId) return;
+      audio.src = src;
+      audio.load();
+      audio.play().catch(e => {
+        console.error("[player] playback error:", e);
+        setStatus(s => ({ ...s, isBuffering: false, playing: false }));
+      });
     });
   }
 
