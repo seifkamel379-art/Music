@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import { searchTracks as apiSearch } from "@/lib/piped";
 import { storage, type Track } from "@/lib/storage";
+import { idbPutFile, idbGetFile, idbDeleteFile } from "@/lib/idb";
 import { useAudioPlayer } from "@/contexts/AudioPlayerContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import MiniPlayer from "@/components/MiniPlayer";
@@ -207,17 +208,64 @@ export default function MainApp({ userName, onLogout }: Props) {
     }
   }
 
-  function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
+  // Load saved device files from IndexedDB on mount.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const meta = storage.getDeviceMeta();
+      if (!meta.length) return;
+      const restored: DeviceTrack[] = [];
+      for (const m of meta) {
+        try {
+          const blob = await idbGetFile(m.id);
+          if (blob) restored.push({ id: m.id, title: m.title, artist: m.artist, url: URL.createObjectURL(blob) });
+        } catch {}
+      }
+      if (!cancelled && restored.length) setDeviceTracks(restored);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  async function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
-    if (!files.length) return;
-    const newTracks: DeviceTrack[] = [];
-    files.forEach((f, i) => {
-      const id = `device-${Date.now()}-${i}-${f.name}`;
-      const url = URL.createObjectURL(f);
-      newTracks.push({ id, title: safeTitle(f.name), artist: "ملفاتك", url });
-    });
-    setDeviceTracks(prev => [...prev, ...newTracks]);
     e.target.value = "";
+    if (!files.length) return;
+
+    const newTracks: DeviceTrack[] = [];
+    const newMeta: { id: string; title: string; artist: string }[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const id = `device-${Date.now()}-${i}-${f.name}`;
+      try {
+        await idbPutFile(id, f);
+        newTracks.push({ id, title: safeTitle(f.name), artist: "ملفاتك", url: URL.createObjectURL(f) });
+        newMeta.push({ id, title: safeTitle(f.name), artist: "ملفاتك" });
+      } catch (err) {
+        console.error("[device] failed to save file", err);
+        showToast("فشل حفظ الملف، حجم كبير؟");
+      }
+    }
+
+    if (newTracks.length) {
+      setDeviceTracks(prev => {
+        const next = [...prev, ...newTracks];
+        storage.setDeviceMeta(next.map(t => ({ id: t.id, title: t.title, artist: t.artist })));
+        return next;
+      });
+      showToast(`تم حفظ ${newTracks.length} أغنية`);
+    }
+  }
+
+  async function removeDeviceTrack(id: string) {
+    try { await idbDeleteFile(id); } catch {}
+    setDeviceTracks(prev => {
+      const removed = prev.find(t => t.id === id);
+      if (removed) { try { URL.revokeObjectURL(removed.url); } catch {} }
+      const next = prev.filter(t => t.id !== id);
+      storage.setDeviceMeta(next.map(t => ({ id: t.id, title: t.title, artist: t.artist })));
+      return next;
+    });
   }
 
   function playDevice(dt: DeviceTrack) {
@@ -346,7 +394,7 @@ export default function MainApp({ userName, onLogout }: Props) {
             currentTrack={currentTrack}
             onAdd={() => fileInputRef.current?.click()}
             onPlay={playDevice}
-            onRemove={(id: string) => setDeviceTracks(prev => prev.filter(t => t.id !== id))}
+            onRemove={removeDeviceTrack}
           />
         )}
       </div>

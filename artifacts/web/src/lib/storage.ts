@@ -30,4 +30,7 @@ export const storage = {
 
   getHistory: (): string[] => get("sk_history", []),
   setHistory: (t: string[]) => set("sk_history", t),
+
+  getDeviceMeta: (): { id: string; title: string; artist: string }[] => get("sk_device_meta", []),
+  setDeviceMeta: (t: { id: string; title: string; artist: string }[]) => set("sk_device_meta", t),
 };
