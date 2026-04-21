@@ -175,51 +175,19 @@ export default function MainApp({ userName, onLogout }: Props) {
       return;
     }
 
+    if (!track.videoId) {
+      showToast("لا يمكن تحميل هذا المقطع");
+      return;
+    }
+
     if (downloadingIds.has(track.videoId)) return;
     setDownloadingIds(prev => new Set([...prev, track.videoId]));
-    showToast("جارٍ تحضير التحميل...");
 
     try {
-      const workerBase = import.meta.env.VITE_WORKER_URL as string | undefined;
-      const workerKey = import.meta.env.VITE_WORKER_AUTH_KEY as string | undefined;
-      let audioSrc: string | null = null;
-
-      if (workerBase) {
-        try {
-          const wUrl = new URL(`${workerBase}/url`);
-          wUrl.searchParams.set("id", track.videoId);
-          if (workerKey) wUrl.searchParams.set("key", workerKey);
-          const wRes = await fetch(wUrl.toString(), { signal: AbortSignal.timeout(12000) });
-          if (wRes.ok) {
-            const data = await wRes.json() as { url?: string };
-            audioSrc = data.url ?? null;
-          }
-        } catch {}
-      }
-
-      if (audioSrc) {
-        showToast("جارٍ تحميل الملف...");
-        const res = await fetch(audioSrc);
-        const blob = await res.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = blobUrl;
-        a.download = `${track.title}.m4a`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-        showToast("تم التحميل بنجاح!");
-      } else {
-        const dlUrl = `/api/music/download?id=${encodeURIComponent(track.videoId)}&title=${encodeURIComponent(track.title)}`;
-        const a = document.createElement("a");
-        a.href = dlUrl;
-        a.download = `${track.title}.m4a`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        showToast("بدأ التحميل...");
-      }
+      const ytUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(track.videoId)}`;
+      const loaderUrl = `https://loader.to/api/card/?url=${encodeURIComponent(ytUrl)}&f=mp3`;
+      window.open(loaderUrl, "_blank", "noopener,noreferrer");
+      showToast("تم فتح صفحة التحميل");
     } catch (e) {
       console.error("[download] error:", e);
       showToast("فشل التحميل، جرب مرة أخرى");
@@ -230,7 +198,7 @@ export default function MainApp({ userName, onLogout }: Props) {
           next.delete(track.videoId);
           return next;
         });
-      }, 4000);
+      }, 2000);
     }
   }
 
