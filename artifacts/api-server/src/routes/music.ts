@@ -1,7 +1,6 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod/v4";
-import { spawn } from "child_process";
-import { PassThrough, type Readable } from "stream";
+import { type Readable } from "stream";
 import type { Request, Response, NextFunction } from "express";
 import { logger } from "../lib/logger";
 import { searchTracks, getAudioStream, getAudioUrl } from "../lib/innertube";
@@ -112,53 +111,7 @@ type StreamResult = {
   cleanup: () => void;
 };
 
-/** Try yt-dlp (android_vr client). Resolves with stream on first bytes, null on failure. */
-function tryYtdlp(videoId: string): Promise<StreamResult | null> {
-  return new Promise(resolve => {
-    const source = getAudioStream(videoId);
-    const pass = new PassThrough();
-
-    let settled = false;
-    let ytdlpStderr = "";
-
-    const cleanup = () => {
-      source.kill();
-    };
-
-    const fail = () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(null);
-    };
-
-    const timeout = setTimeout(fail, 25000);
-
-    source.stderr.on("data", (c: Buffer) => { ytdlpStderr = `${ytdlpStderr}${c}`.slice(-2000); });
-    source.stdout.on("error", fail);
-
-    source.stdout.once("data", (firstChunk: Buffer) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-
-      pass.write(firstChunk);
-      source.stdout.pipe(pass);
-
-      resolve({ stream: pass, contentType: "audio/mp4", cleanup });
-    });
-
-    source.stdout.on("close", () => {
-      clearTimeout(timeout);
-      if (!settled) {
-        logger.warn({ videoId, ytdlpStderr }, "yt-dlp exited with no output");
-        fail();
-      }
-    });
-  });
-}
-
-/** Try Invidious instances for a proxied audio stream. */
+/** Try Invidious instances for a proxied audio stream (fallback). */
 async function tryInvidious(videoId: string): Promise<StreamResult | null> {
   for (const instance of INVIDIOUS_INSTANCES) {
     try {
@@ -191,14 +144,14 @@ async function tryInvidious(videoId: string): Promise<StreamResult | null> {
   return null;
 }
 
-/** Resolve stream source: yt-dlp first, Invidious fallback. */
+/** Resolve stream: Innertube first, Invidious fallback. No yt-dlp needed. */
 async function resolveStream(videoId: string): Promise<StreamResult> {
-  const ytdlpResult = await tryYtdlp(videoId);
-  if (ytdlpResult) {
-    logger.info({ videoId }, "Streaming via yt-dlp (android_vr)");
-    return ytdlpResult;
+  const innertubeResult = await getAudioStream(videoId);
+  if (innertubeResult) {
+    logger.info({ videoId }, "Streaming via Innertube");
+    return innertubeResult;
   }
-  logger.warn({ videoId }, "yt-dlp failed, trying Invidious proxy");
+  logger.warn({ videoId }, "Innertube stream failed, trying Invidious proxy");
   const invResult = await tryInvidious(videoId);
   if (invResult) return invResult;
   throw new Error("All stream sources failed for " + videoId);

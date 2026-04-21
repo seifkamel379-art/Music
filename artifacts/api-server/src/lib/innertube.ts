@@ -1,6 +1,5 @@
 import { Innertube } from "youtubei.js";
 import { Readable } from "stream";
-import { spawn } from "child_process";
 import { logger } from "./logger";
 
 let client: Innertube | null = null;
@@ -10,7 +9,7 @@ const TTL = 55 * 60 * 1000;
 export async function getClient(): Promise<Innertube> {
   if (client && Date.now() - clientCreatedAt < TTL) return client;
   logger.info("Initializing Innertube client");
-  client = await Innertube.create({ generate_session_locally: true });
+  client = await Innertube.create({});
   clientCreatedAt = Date.now();
   logger.info("Innertube client ready");
   return client;
@@ -22,19 +21,26 @@ function fmtDuration(seconds: number): string {
   return `${Math.floor(n / 60)}:${(n % 60).toString().padStart(2, "0")}`;
 }
 
+function upgradeThumbnail(url: string): string {
+  if (url.includes("lh3.googleusercontent.com")) {
+    return url.replace(/=w\d+.*$/, "=w480-h480-l90-rj");
+  }
+  if (url.includes("i.ytimg.com")) {
+    return url
+      .replace(/\/hqdefault\.jpg(\?.*)?$/, "/sddefault.jpg")
+      .replace(/\/mqdefault\.jpg(\?.*)?$/, "/sddefault.jpg")
+      .replace(/\/default\.jpg(\?.*)?$/, "/sddefault.jpg");
+  }
+  return url;
+}
+
 function bestThumbnail(thumbnails: Array<{ url?: string; width?: number }> | undefined, videoId: string): string {
   if (thumbnails && thumbnails.length > 0) {
     const sorted = [...thumbnails].sort((a, b) => (b.width ?? 0) - (a.width ?? 0));
     const best = sorted[0]?.url;
-    if (best) return best;
+    if (best) return upgradeThumbnail(best);
   }
   return `https://i.ytimg.com/vi/${videoId}/sddefault.jpg`;
-}
-
-function cookieArgs(): string[] {
-  const cookie = process.env["YOUTUBE_COOKIE"];
-  if (cookie) return ["--add-header", `Cookie:${cookie}`];
-  return [];
 }
 
 export type TrackMeta = {
@@ -107,91 +113,73 @@ export async function searchTracks(query: string): Promise<TrackMeta[]> {
   return items;
 }
 
-/* ── yt-dlp: get direct CDN URL (android_vr client) ─────────────────────
+/* ── Innertube: get direct audio CDN URL (no yt-dlp, no cookies) ──────────
  *
- * android_vr client bypasses bot-check and returns a signed YouTube CDN URL.
- * The URL can be played directly from the user's browser (no server proxy needed).
+ * IOS/ANDROID clients return plain (non-ciphered) audio URLs directly.
+ * We read from streaming_data.adaptive_formats to get the URL without
+ * needing JavaScript-based decipher.
  */
-export function getAudioUrl(videoId: string): Promise<string | null> {
-  return new Promise(resolve => {
-    const args = [
-      "--no-warnings",
-      "--no-check-certificate",
-      "--geo-bypass",
-      "--socket-timeout", "20",
-      "--no-playlist",
-      "--extractor-args", "youtube:player_client=android_vr",
-      "-f", "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
-      ...cookieArgs(),
-      "--get-url",
-      `https://www.youtube.com/watch?v=${videoId}`,
-    ];
+export async function getAudioUrl(videoId: string): Promise<string | null> {
+  const clients = ["IOS", "ANDROID", "TV_EMBEDDED"] as const;
 
-    logger.info({ videoId }, "yt-dlp resolving URL via android_vr client");
+  for (const clientType of clients) {
+    try {
+      logger.info({ videoId, clientType }, "Innertube resolving audio URL");
+      const yt = await getClient();
+      const info = await yt.getBasicInfo(videoId, clientType);
+      const adaptiveFormats: any[] = (info.streaming_data?.adaptive_formats ?? []) as any[];
 
-    const proc = spawn("yt-dlp", args, { stdio: ["pipe", "pipe", "pipe"] });
+      const audioFormats = adaptiveFormats.filter(
+        (f: any) => f.has_audio && !f.has_video && typeof f.url === "string" && (f.url as string).startsWith("http"),
+      );
 
-    let output = "";
-    let errOutput = "";
-
-    const timeout = setTimeout(() => {
-      try { proc.kill("SIGKILL"); } catch {}
-      logger.warn({ videoId }, "yt-dlp android_vr URL resolution timed out");
-      resolve(null);
-    }, 20000);
-
-    proc.stdout.on("data", (d: Buffer) => { output += d.toString(); });
-    proc.stderr.on("data", (d: Buffer) => { errOutput = `${errOutput}${d}`.slice(-1000); });
-
-    proc.on("close", code => {
-      clearTimeout(timeout);
-      const url = output.trim().split("\n")[0].trim();
-      if (code === 0 && url.startsWith("http")) {
-        logger.info({ videoId }, "yt-dlp android_vr URL OK");
-        resolve(url);
-      } else {
-        logger.warn({ videoId, code, errOutput }, "yt-dlp android_vr URL failed");
-        resolve(null);
+      if (audioFormats.length === 0) {
+        logger.warn({ videoId, clientType, total: adaptiveFormats.length }, "No plain-URL audio formats");
+        continue;
       }
-    });
 
-    proc.on("error", () => {
-      clearTimeout(timeout);
-      resolve(null);
-    });
-  });
+      const best = audioFormats.sort((a: any, b: any) => (b.bitrate ?? 0) - (a.bitrate ?? 0))[0];
+      logger.info({ videoId, clientType, bitrate: best.bitrate }, "Innertube audio URL OK");
+      return best.url as string;
+    } catch (e) {
+      logger.warn({ err: e, videoId, clientType }, "Innertube audio URL failed for client");
+    }
+  }
+
+  logger.warn({ videoId }, "All Innertube clients failed for audio URL");
+  return null;
 }
 
-/* ── yt-dlp audio stream (android_vr client, no cookies) ────────────────
- *
- * Used as fallback when direct URL playback fails — streams via server.
- */
-export function getAudioStream(videoId: string): {
-  stdout: Readable;
-  stderr: Readable;
-  kill: () => void;
-} {
-  const args: string[] = [
-    "--no-warnings",
-    "--no-check-certificate",
-    "--geo-bypass",
-    "--socket-timeout", "20",
-    "--no-update",
-    "--no-playlist",
-    "--extractor-args", "youtube:player_client=android_vr",
-    "-f", "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
-    ...cookieArgs(),
-    "-o", "-",
-    `https://www.youtube.com/watch?v=${videoId}`,
-  ];
+/* ── Innertube: audio stream via youtubei.js download() ─────────────────── */
+export async function getAudioStream(videoId: string): Promise<{
+  stream: Readable;
+  contentType: string;
+  cleanup: () => void;
+} | null> {
+  const clients = ["IOS", "ANDROID"] as const;
 
-  logger.info({ videoId }, "yt-dlp streaming via android_vr client");
+  for (const clientType of clients) {
+    try {
+      logger.info({ videoId, clientType }, "Innertube download() streaming");
+      const yt = await getClient();
+      const webStream = await yt.download(videoId, {
+        type: "audio",
+        quality: "best",
+        client: clientType,
+      });
 
-  const proc = spawn("yt-dlp", args, { stdio: ["pipe", "pipe", "pipe"] });
+      const readable = Readable.fromWeb(webStream as any);
+      logger.info({ videoId, clientType }, "Innertube download() OK");
+      return {
+        stream: readable,
+        contentType: "audio/mp4",
+        cleanup: () => { readable.destroy(); },
+      };
+    } catch (e) {
+      logger.warn({ err: e, videoId, clientType }, "Innertube download() failed for client");
+    }
+  }
 
-  return {
-    stdout: proc.stdout,
-    stderr: proc.stderr,
-    kill: () => { try { proc.kill("SIGKILL"); } catch {} },
-  };
+  logger.warn({ videoId }, "All Innertube download clients failed, will try Invidious");
+  return null;
 }
