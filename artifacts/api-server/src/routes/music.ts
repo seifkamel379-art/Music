@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { z } from "zod/v4";
 import { type Readable } from "stream";
 import type { Request, Response, NextFunction } from "express";
+import { spawn } from "child_process";
 import { logger } from "../lib/logger";
 import { searchTracks, getAudioStream } from "../lib/innertube";
 
@@ -104,15 +105,72 @@ async function tryInvidious(videoId: string): Promise<StreamResult | null> {
   return null;
 }
 
-/** Resolve stream: Innertube first, Invidious fallback. */
+/** Stream via yt-dlp using YOUTUBE_COOKIE env var (final, most reliable fallback). */
+function tryYtDlp(videoId: string): Promise<StreamResult | null> {
+  return new Promise((resolve) => {
+    const cookie = process.env["YOUTUBE_COOKIE"];
+    const url = `https://www.youtube.com/watch?v=${videoId}`;
+    const args = [
+      "-f", "bestaudio[ext=m4a]/bestaudio",
+      "-o", "-",
+      "--no-warnings",
+      "--no-playlist",
+      "--quiet",
+    ];
+    if (cookie) args.push("--add-header", `Cookie:${cookie}`);
+    args.push("--", url);
+
+    let child;
+    try {
+      child = spawn("yt-dlp", args, { stdio: ["ignore", "pipe", "pipe"] });
+    } catch (e) {
+      logger.warn({ err: e, videoId }, "yt-dlp spawn failed");
+      resolve(null);
+      return;
+    }
+
+    let stderr = "";
+    child.stderr.on("data", (b) => { stderr += b.toString().slice(0, 500); });
+
+    let resolved = false;
+    const cleanup = () => { try { child.kill("SIGKILL"); } catch {} };
+
+    // Resolve as soon as we get the first byte of audio data.
+    child.stdout.once("data", () => {
+      if (resolved) return;
+      resolved = true;
+      logger.info({ videoId }, "yt-dlp streaming OK");
+      resolve({ stream: child.stdout as unknown as Readable, contentType: "audio/mp4", cleanup });
+    });
+
+    child.on("error", (err) => {
+      if (resolved) return;
+      resolved = true;
+      logger.warn({ err, videoId }, "yt-dlp process error");
+      resolve(null);
+    });
+
+    child.on("close", (code) => {
+      if (resolved) return;
+      resolved = true;
+      logger.warn({ videoId, code, stderr }, "yt-dlp exited before producing data");
+      resolve(null);
+    });
+  });
+}
+
+/** Resolve stream: Innertube → Invidious → yt-dlp (with cookies). */
 async function resolveStream(videoId: string): Promise<StreamResult | null> {
   const innertubeResult = await getAudioStream(videoId);
   if (innertubeResult) {
     logger.info({ videoId }, "Streaming via Innertube");
     return innertubeResult;
   }
-  logger.warn({ videoId }, "Innertube stream failed, trying Invidious proxy");
-  return tryInvidious(videoId);
+  logger.warn({ videoId }, "Innertube failed, trying Invidious proxy");
+  const invResult = await tryInvidious(videoId);
+  if (invResult) return invResult;
+  logger.warn({ videoId }, "Invidious failed, trying yt-dlp");
+  return tryYtDlp(videoId);
 }
 
 /* ── Stream endpoint (used as in-browser playback fallback if needed) ────── */
