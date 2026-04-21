@@ -113,18 +113,48 @@ export async function searchTracks(query: string): Promise<TrackMeta[]> {
   return items;
 }
 
-/* ── Innertube: get direct audio CDN URL (no yt-dlp, no cookies) ──────────
+/* ── Cloudflare Worker resolver (primary, when WORKER_URL is set) ──────────
  *
- * IOS/ANDROID clients return plain (non-ciphered) audio URLs directly.
- * We read from streaming_data.adaptive_formats to get the URL without
- * needing JavaScript-based decipher.
+ * Calls the deployed Cloudflare Worker which runs on edge IPs rarely
+ * blocked by YouTube.
  */
-export async function getAudioUrl(videoId: string): Promise<string | null> {
+async function getAudioUrlFromWorker(videoId: string): Promise<string | null> {
+  const workerUrl = process.env["WORKER_URL"];
+  if (!workerUrl) return null;
+
+  try {
+    const authKey = process.env["WORKER_AUTH_KEY"];
+    const url = new URL(`${workerUrl.replace(/\/$/, "")}/url`);
+    url.searchParams.set("id", videoId);
+    if (authKey) url.searchParams.set("key", authKey);
+
+    logger.info({ videoId }, "Calling Cloudflare Worker resolver");
+
+    const res = await fetch(url.toString(), { signal: AbortSignal.timeout(15000) });
+    if (!res.ok) {
+      logger.warn({ videoId, status: res.status }, "Cloudflare Worker returned error");
+      return null;
+    }
+
+    const data = await res.json() as { url?: string };
+    if (data.url) {
+      logger.info({ videoId, cached: (data as any).cached }, "Cloudflare Worker resolved URL OK");
+      return data.url;
+    }
+  } catch (e) {
+    logger.warn({ err: e, videoId }, "Cloudflare Worker call failed");
+  }
+
+  return null;
+}
+
+/* ── Local Innertube: get direct audio CDN URL ──────────────────────────── */
+async function getAudioUrlLocal(videoId: string): Promise<string | null> {
   const clients = ["IOS", "ANDROID", "TV_EMBEDDED"] as const;
 
   for (const clientType of clients) {
     try {
-      logger.info({ videoId, clientType }, "Innertube resolving audio URL");
+      logger.info({ videoId, clientType }, "Innertube (local) resolving audio URL");
       const yt = await getClient();
       const info = await yt.getBasicInfo(videoId, clientType);
       const adaptiveFormats: any[] = (info.streaming_data?.adaptive_formats ?? []) as any[];
@@ -139,47 +169,74 @@ export async function getAudioUrl(videoId: string): Promise<string | null> {
       }
 
       const best = audioFormats.sort((a: any, b: any) => (b.bitrate ?? 0) - (a.bitrate ?? 0))[0];
-      logger.info({ videoId, clientType, bitrate: best.bitrate }, "Innertube audio URL OK");
+      logger.info({ videoId, clientType, bitrate: best.bitrate }, "Innertube (local) audio URL OK");
       return best.url as string;
     } catch (e) {
-      logger.warn({ err: e, videoId, clientType }, "Innertube audio URL failed for client");
+      logger.warn({ err: e, videoId, clientType }, "Innertube (local) audio URL failed for client");
     }
   }
 
-  logger.warn({ videoId }, "All Innertube clients failed for audio URL");
+  logger.warn({ videoId }, "All local Innertube clients failed");
   return null;
 }
 
-/* ── Innertube: audio stream via youtubei.js download() ─────────────────── */
+/* ── Public: getAudioUrl — Worker first, local fallback ─────────────────── */
+export async function getAudioUrl(videoId: string): Promise<string | null> {
+  const workerUrl = await getAudioUrlFromWorker(videoId);
+  if (workerUrl) return workerUrl;
+  return getAudioUrlLocal(videoId);
+}
+
+/* ── Stream helper: fetch a URL and return as Node Readable ─────────────── */
+async function fetchAsStream(url: string, contentType: string): Promise<{
+  stream: Readable; contentType: string; cleanup: () => void;
+} | null> {
+  try {
+    const controller = new AbortController();
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { "User-Agent": "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)", "Range": "bytes=0-" },
+    });
+    if (!res.ok || !res.body) return null;
+    const ct = res.headers.get("content-type") ?? contentType;
+    const readable = Readable.fromWeb(res.body as any);
+    return { stream: readable, contentType: ct, cleanup: () => { try { controller.abort(); } catch {} } };
+  } catch {
+    return null;
+  }
+}
+
+/* ── Audio stream: Worker → Innertube download() → null (caller tries Invidious) */
 export async function getAudioStream(videoId: string): Promise<{
   stream: Readable;
   contentType: string;
   cleanup: () => void;
 } | null> {
-  const clients = ["IOS", "ANDROID"] as const;
+  /* 1. Try Cloudflare Worker URL → stream via server */
+  const workerAudioUrl = await getAudioUrlFromWorker(videoId);
+  if (workerAudioUrl) {
+    const result = await fetchAsStream(workerAudioUrl, "audio/mp4");
+    if (result) {
+      logger.info({ videoId }, "Streaming via Cloudflare Worker URL");
+      return result;
+    }
+  }
 
+  /* 2. Try local Innertube download() */
+  const clients = ["IOS", "ANDROID"] as const;
   for (const clientType of clients) {
     try {
       logger.info({ videoId, clientType }, "Innertube download() streaming");
       const yt = await getClient();
-      const webStream = await yt.download(videoId, {
-        type: "audio",
-        quality: "best",
-        client: clientType,
-      });
-
+      const webStream = await yt.download(videoId, { type: "audio", quality: "best", client: clientType });
       const readable = Readable.fromWeb(webStream as any);
       logger.info({ videoId, clientType }, "Innertube download() OK");
-      return {
-        stream: readable,
-        contentType: "audio/mp4",
-        cleanup: () => { readable.destroy(); },
-      };
+      return { stream: readable, contentType: "audio/mp4", cleanup: () => { readable.destroy(); } };
     } catch (e) {
-      logger.warn({ err: e, videoId, clientType }, "Innertube download() failed for client");
+      logger.warn({ err: e, videoId, clientType }, "Innertube download() failed");
     }
   }
 
-  logger.warn({ videoId }, "All Innertube download clients failed, will try Invidious");
+  logger.warn({ videoId }, "All stream sources failed, caller will try Invidious");
   return null;
 }

@@ -1,0 +1,13 @@
+name = "seif-music-resolver"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Cache audio URLs using Cloudflare KV (optional, for speed)
+# Uncomment after creating a KV namespace:
+# [[kv_namespaces]]
+# binding = "URL_CACHE"
+# id = "YOUR_KV_NAMESPACE_ID"
+
+# Set secrets via CLI:
+#   wrangler secret put AUTH_KEY
