@@ -116,13 +116,21 @@ export default function PlayerModal({ onClose, isFav, onFavorite, onDownload, is
         ))}
       </div>
 
-      {/* Radial green glow when playing */}
+      {/* Radial green glow when playing — stronger */}
       <div style={{
         position: "absolute", inset: 0, zIndex: 0, pointerEvents: "none",
         background: status.playing
-          ? "radial-gradient(ellipse 70% 50% at 50% 100%, rgba(29,185,84,0.13) 0%, transparent 70%)"
-          : "none",
-        transition: "background 1s ease",
+          ? "radial-gradient(ellipse 90% 55% at 50% 105%, rgba(29,185,84,0.22) 0%, rgba(29,185,84,0.06) 50%, transparent 75%)"
+          : "radial-gradient(ellipse 60% 30% at 50% 110%, rgba(29,185,84,0.06) 0%, transparent 60%)",
+        transition: "background 1.2s ease",
+      }} />
+      {/* Top-edge green line */}
+      <div style={{
+        position: "absolute", top: 0, left: 0, right: 0, height: 3, zIndex: 2, pointerEvents: "none",
+        background: "linear-gradient(90deg, transparent, #1DB954, #1ED760, #1DB954, transparent)",
+        opacity: status.playing ? 1 : 0.4,
+        transition: "opacity 0.5s ease",
+        boxShadow: "0 0 12px #1DB954",
       }} />
 
       {/* ===== CONTENT (above animation) ===== */}
@@ -145,13 +153,13 @@ export default function PlayerModal({ onClose, isFav, onFavorite, onDownload, is
         {/* Album Art */}
         <div style={{ display: "flex", justifyContent: "center", paddingInline: 24, flexShrink: 0 }}>
           <div style={{
-            width: artSize, height: artSize, borderRadius: 10, overflow: "hidden",
+            width: artSize, height: artSize, borderRadius: 12, overflow: "hidden",
             boxShadow: status.playing
-              ? "0 20px 60px rgba(0,0,0,0.6), 0 0 40px rgba(29,185,84,0.18)"
-              : "0 20px 60px rgba(0,0,0,0.6)",
+              ? "0 24px 64px rgba(0,0,0,0.7), 0 0 0 2px #1DB954, 0 0 48px rgba(29,185,84,0.35)"
+              : "0 20px 60px rgba(0,0,0,0.6), 0 0 0 1.5px rgba(29,185,84,0.25)",
             position: "relative", background: "#282828",
             transform: status.playing ? "scale(1.04)" : "scale(1)",
-            transition: "transform 0.5s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.8s ease",
+            transition: "transform 0.5s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.6s ease",
           }}>
             {currentTrack.thumbnail && !imgErr
               ? <img src={currentTrack.thumbnail} onError={() => setImgErr(true)} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />

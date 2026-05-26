@@ -408,32 +408,50 @@ export default function MainApp({ userName, onLogout }: Props) {
       {/* BOTTOM NAV */}
       <nav style={{
         position: "fixed", bottom: 0, left: 0, right: 0, height: 80,
-        background: navBg, borderTop: `1px solid ${navBorder}`,
-        display: "flex", alignItems: "center", justifyContent: "space-around",
+        background: navBg,
+        borderTop: `2px solid ${tab ? "#1DB954" : navBorder}`,
+        display: "flex", alignItems: "stretch", justifyContent: "space-around",
         zIndex: 40, paddingBottom: "env(safe-area-inset-bottom)",
+        boxShadow: "0 -4px 24px rgba(29,185,84,0.12)",
       }}>
         {([
-          { key: "home", label: "الرئيسية", icon: (a: boolean) => <HomeIcon active={a} color={colors.foreground} /> },
-          { key: "search", label: "استكشاف", icon: (a: boolean) => <SearchIcon active={a} color={colors.foreground} /> },
-          { key: "library", label: "مكتبتي", icon: (a: boolean) => <LibraryIcon active={a} color={colors.foreground} /> },
-          { key: "device", label: "جهازي", icon: (a: boolean) => <DeviceIcon active={a} color={colors.foreground} /> },
-        ] as const).map(({ key, label, icon }) => (
-          <button
-            key={key}
-            onClick={() => setTab(key as Tab)}
-            style={{
-              display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
-              background: "none", border: "none", cursor: "pointer", padding: "6px 14px",
-              opacity: tab === key ? 1 : 0.5,
-              transition: "opacity 0.15s",
-            }}
-          >
-            {icon(tab === key)}
-            <span style={{ color: tab === key ? colors.foreground : colors.mutedForeground, fontSize: 10, fontWeight: 700 }}>
-              {label}
-            </span>
-          </button>
-        ))}
+          { key: "home", label: "الرئيسية", icon: (a: boolean) => <HomeIcon active={a} color={a ? "#1DB954" : colors.foreground} /> },
+          { key: "search", label: "استكشاف", icon: (a: boolean) => <SearchIcon active={a} color={a ? "#1DB954" : colors.foreground} /> },
+          { key: "library", label: "مكتبتي", icon: (a: boolean) => <LibraryIcon active={a} color={a ? "#1DB954" : colors.foreground} /> },
+          { key: "device", label: "جهازي", icon: (a: boolean) => <DeviceIcon active={a} color={a ? "#1DB954" : colors.foreground} /> },
+        ] as const).map(({ key, label, icon }) => {
+          const isActive = tab === key;
+          return (
+            <button
+              key={key}
+              onClick={() => setTab(key as Tab)}
+              style={{
+                display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4,
+                background: "none", border: "none", cursor: "pointer", flex: 1, padding: "6px 0",
+                position: "relative",
+                opacity: isActive ? 1 : 0.5,
+                transition: "opacity 0.15s",
+              }}
+            >
+              {/* Green indicator bar at top */}
+              <div style={{
+                position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)",
+                width: isActive ? 28 : 0, height: 3, borderRadius: "0 0 3px 3px",
+                background: "#1DB954",
+                boxShadow: isActive ? "0 0 8px #1DB954" : "none",
+                transition: "width 0.25s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.25s",
+              }} />
+              {icon(isActive)}
+              <span style={{
+                color: isActive ? "#1DB954" : colors.mutedForeground,
+                fontSize: 10, fontWeight: 700,
+                transition: "color 0.15s",
+              }}>
+                {label}
+              </span>
+            </button>
+          );
+        })}
       </nav>
     </div>
   );
@@ -511,10 +529,17 @@ function QuickCard({ label, count, onClick, color, colors, icon }: any) {
   return (
     <button
       onClick={onClick}
-      style={{ display: "flex", alignItems: "center", gap: 10, background: colors.secondary, border: "none", borderRadius: 6, padding: 0, cursor: "pointer", overflow: "hidden", height: 56, direction: "rtl", width: "100%", transition: "opacity 0.15s" }}
+      style={{
+        display: "flex", alignItems: "center", gap: 10,
+        background: colors.secondary,
+        border: "1px solid rgba(29,185,84,0.2)",
+        borderRadius: 10, padding: 0, cursor: "pointer", overflow: "hidden",
+        height: 58, direction: "rtl", width: "100%", transition: "opacity 0.15s",
+        boxShadow: "inset 3px 0 0 0 #1DB954",
+      }}
     >
-      <div style={{ width: 56, height: 56, background: color, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>{icon}</div>
-      <span style={{ color: colors.foreground, fontSize: 13, fontWeight: 700, flex: 1, textAlign: "right", paddingRight: 4 }}>{label}</span>
+      <div style={{ width: 58, height: 58, background: color, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>{icon}</div>
+      <span style={{ color: colors.foreground, fontSize: 13, fontWeight: 700, flex: 1, textAlign: "right", paddingRight: 6 }}>{label}</span>
     </button>
   );
 }
@@ -534,7 +559,8 @@ function SectionRow({ title, tracks, loading, colors, currentTrack, isFav, downl
 
   return (
     <div ref={ref} style={{ marginTop: 28 }}>
-      <div style={{ paddingInline: 16, marginBottom: 12, direction: "rtl" }}>
+      <div style={{ paddingInline: 16, marginBottom: 12, direction: "rtl", display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ width: 3, height: 22, borderRadius: 2, background: "#1DB954", boxShadow: "0 0 6px #1DB95488", flexShrink: 0 }} />
         <span style={{ color: colors.foreground, fontSize: 18, fontWeight: 700 }}>{title}</span>
       </div>
       <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingInline: 16, scrollbarWidth: "none", paddingBottom: 4 }}>
@@ -569,7 +595,12 @@ function TrackCard({ track, colors, isCurrent, isFav, isDownloading, onPlay, onF
       {/* Thumbnail */}
       <div
         onClick={onPlay}
-        style={{ width: 148, height: 148, borderRadius: 6, overflow: "hidden", marginBottom: 6, position: "relative", background: accentColor, cursor: "pointer" }}
+        style={{
+          width: 148, height: 148, borderRadius: 8, overflow: "hidden", marginBottom: 6,
+          position: "relative", background: accentColor, cursor: "pointer",
+          boxShadow: isCurrent ? "0 0 0 2.5px #1DB954, 0 0 16px rgba(29,185,84,0.4)" : "none",
+          transition: "box-shadow 0.3s ease",
+        }}
       >
         {track.thumbnail && !imgErr
           ? <img src={track.thumbnail} onError={() => setImgErr(true)} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />

@@ -18,9 +18,12 @@ export default function TrackRow({ track, index, isCurrent, isPlaying, isFavorit
   return (
     <div onClick={onPlay} style={{
       display: "flex", alignItems: "center", gap: 10,
-      margin: "0 18px 8px", border: `1px solid ${isCurrent ? C.primary : C.border}`,
-      borderRadius: 20, padding: 10, background: isCurrent ? C.secondary : C.card,
-      cursor: "pointer", userSelect: "none", transition: "background 0.15s",
+      margin: "0 18px 8px",
+      border: isCurrent ? "1.5px solid #1DB954" : `1px solid ${C.border}`,
+      borderRadius: 20, padding: 10,
+      background: isCurrent ? "rgba(29,185,84,0.08)" : C.card,
+      cursor: "pointer", userSelect: "none", transition: "background 0.2s, border-color 0.2s",
+      boxShadow: isCurrent ? "0 0 12px rgba(29,185,84,0.2), inset 0 0 0 0.5px rgba(29,185,84,0.15)" : "none",
     }}>
       {/* Thumbnail */}
       <div style={{ position: "relative", flexShrink: 0 }}>

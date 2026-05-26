@@ -5,16 +5,27 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+env:
+  MIN_SDK: 21
+  TARGET_SDK: 35
+  COMPILE_SDK: 35
+
 jobs:
   build:
     name: Build Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
 
     steps:
+      # ──────────────────────────────────────────────────
+      # 1. Checkout
+      # ──────────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ──────────────────────────────────────────────────
+      # 2. Toolchain
+      # ──────────────────────────────────────────────────
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -32,18 +43,16 @@ jobs:
           version: 10
           run_install: false
 
-      - name: Get pnpm store directory
-        id: pnpm-cache
-        shell: bash
-        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
-
       - name: Cache pnpm store
         uses: actions/cache@v4
         with:
-          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          path: $(pnpm store path --silent)
           key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-pnpm-
 
+      # ──────────────────────────────────────────────────
+      # 3. Install & Build web
+      # ──────────────────────────────────────────────────
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -55,58 +64,132 @@ jobs:
           BASE_PATH: /
         run: pnpm run build
 
+      # ──────────────────────────────────────────────────
+      # 4. Capacitor – add android platform
+      # ──────────────────────────────────────────────────
       - name: Add Android platform
         working-directory: artifacts/web
-        run: npx cap add android 2>&1 | tee /tmp/cap-add.log || true
+        run: |
+          npx cap add android 2>&1 | tee /tmp/cap-add.log
+          echo "=== cap add exit: $?" >> /tmp/cap-add.log
 
-      - name: Apply Android patches
+      # ──────────────────────────────────────────────────
+      # 5. Patch AndroidManifest.xml
+      # ──────────────────────────────────────────────────
+      - name: Patch AndroidManifest
         working-directory: artifacts/web
         run: |
-          # Permissions in AndroidManifest.xml
           MANIFEST="android/app/src/main/AndroidManifest.xml"
-          if [ -f "$MANIFEST" ]; then
-            sed -i '/<manifest /a\    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />' "$MANIFEST"
-          fi
+          echo "--- Original manifest ---" | tee /tmp/manifest-patch.log
+          cat "$MANIFEST" >> /tmp/manifest-patch.log
 
-          # Enable cleartext traffic + usesCleartextTraffic
-          if [ -f "$MANIFEST" ]; then
-            sed -i 's/android:usesCleartextTraffic="false"/android:usesCleartextTraffic="true"/' "$MANIFEST" || true
-            sed -i '/<application/s/>$/ android:usesCleartextTraffic="true">/' "$MANIFEST" 2>/dev/null || true
-          fi
+          # Remove any existing duplicate permission lines first
+          sed -i '/<uses-permission android:name="android.permission.INTERNET"/d' "$MANIFEST"
 
-          # Set hardware acceleration
-          if [ -f "android/app/src/main/res/xml/network_security_config.xml" ]; then
-            echo "Network security config exists"
+          # Insert all required permissions after <manifest ...>
+          PERMS='    <uses-permission android:name="android.permission.INTERNET" />\n'
+          PERMS+='    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n'
+          PERMS+='    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />\n'
+          PERMS+='    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />\n'
+          PERMS+='    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n'
+          PERMS+='    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />\n'
+          PERMS+='    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n'
+          PERMS+='    <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION" />'
+          # Insert after first line containing <manifest
+          sed -i "/<manifest /a\\${PERMS}" "$MANIFEST"
+
+          # Enable cleartext traffic for Google CDN audio URLs
+          if grep -q 'android:usesCleartextTraffic' "$MANIFEST"; then
+            sed -i 's/android:usesCleartextTraffic="false"/android:usesCleartextTraffic="true"/' "$MANIFEST"
           else
-            mkdir -p android/app/src/main/res/xml
-            cat > android/app/src/main/res/xml/network_security_config.xml << 'NETXML'
-<?xml version="1.0" encoding="utf-8"?>
-<network-security-config>
-    <base-config cleartextTrafficPermitted="true">
-        <trust-anchors>
-            <certificates src="system"/>
-        </trust-anchors>
-    </base-config>
-</network-security-config>
-NETXML
+            sed -i 's/<application/<application android:usesCleartextTraffic="true"/' "$MANIFEST"
           fi
 
-      - name: Copy MediaStore plugin
+          echo "--- Patched manifest ---" >> /tmp/manifest-patch.log
+          cat "$MANIFEST" >> /tmp/manifest-patch.log
+          echo "Manifest patch done"
+
+      # ──────────────────────────────────────────────────
+      # 6. Patch build.gradle – SDK versions + ProGuard off
+      # ──────────────────────────────────────────────────
+      - name: Patch build.gradle SDK versions
+        working-directory: artifacts/web/android
+        run: |
+          GRADLE="app/build.gradle"
+          echo "--- Original build.gradle ---" | tee /tmp/gradle-patch.log
+          cat "$GRADLE" >> /tmp/gradle-patch.log
+
+          # Force minSdk to 21 (Android 5.0) — widest possible support
+          sed -i "s/minSdkVersion [0-9]*/minSdkVersion ${{ env.MIN_SDK }}/g" "$GRADLE"
+          sed -i "s/minSdk [0-9]*/minSdk ${{ env.MIN_SDK }}/g" "$GRADLE"
+          sed -i "s/targetSdkVersion [0-9]*/targetSdkVersion ${{ env.TARGET_SDK }}/g" "$GRADLE"
+          sed -i "s/targetSdk [0-9]*/targetSdk ${{ env.TARGET_SDK }}/g" "$GRADLE"
+          sed -i "s/compileSdkVersion [0-9]*/compileSdkVersion ${{ env.COMPILE_SDK }}/g" "$GRADLE"
+          sed -i "s/compileSdk [0-9]*/compileSdk ${{ env.COMPILE_SDK }}/g" "$GRADLE"
+
+          # Disable minify/shrink for debug build (keeps all code, simpler logs)
+          sed -i "s/minifyEnabled true/minifyEnabled false/g" "$GRADLE"
+          sed -i "s/shrinkResources true/shrinkResources false/g" "$GRADLE"
+
+          echo "--- Patched build.gradle ---" >> /tmp/gradle-patch.log
+          cat "$GRADLE" >> /tmp/gradle-patch.log
+          echo "build.gradle patched"
+
+      # ──────────────────────────────────────────────────
+      # 7. Copy & register MediaScan plugin
+      # ──────────────────────────────────────────────────
+      - name: Install MediaScan plugin
         working-directory: artifacts/web
         run: |
-          JAVA_DIR="android/app/src/main/java/io/seifoo/app"
-          mkdir -p "$JAVA_DIR"
-          cp ../../.github/android-patches/MediaScanPlugin.java "$JAVA_DIR/MediaScanPlugin.java" 2>/dev/null || true
-          cp ../../.github/android-patches/patch-mainactivity.sh /tmp/patch-mainactivity.sh 2>/dev/null || true
-          if [ -f "/tmp/patch-mainactivity.sh" ]; then
-            chmod +x /tmp/patch-mainactivity.sh
-            bash /tmp/patch-mainactivity.sh "$JAVA_DIR"
+          # Detect the app package directory
+          PKG_DIR=$(find android/app/src/main/java -type d | head -1)
+          echo "Package dir: $PKG_DIR" | tee /tmp/plugin-install.log
+
+          mkdir -p "$PKG_DIR"
+          cp ../../.github/android-patches/MediaScanPlugin.java "$PKG_DIR/MediaScanPlugin.java"
+          echo "Copied MediaScanPlugin.java to $PKG_DIR" >> /tmp/plugin-install.log
+
+          # Fix package name to match actual package
+          PACKAGE=$(grep -r "^package " "$PKG_DIR/MainActivity.java" 2>/dev/null | head -1 | sed 's/package //;s/;//')
+          if [ -n "$PACKAGE" ]; then
+            sed -i "s/^package io.seifoo.app;/package $PACKAGE;/" "$PKG_DIR/MediaScanPlugin.java"
+            sed -i "s/^class ContentUris/class ContentUrisHelper/" "$PKG_DIR/MediaScanPlugin.java" || true
+            echo "Set package: $PACKAGE" >> /tmp/plugin-install.log
           fi
 
+          # Patch MainActivity to register the plugin
+          MAIN="$PKG_DIR/MainActivity.java"
+          echo "--- Original MainActivity ---" >> /tmp/plugin-install.log
+          cat "$MAIN" >> /tmp/plugin-install.log
+
+          if grep -q "registerPlugin\|MediaScanPlugin" "$MAIN"; then
+            echo "Plugin already registered" >> /tmp/plugin-install.log
+          else
+            # Add import
+            sed -i "/^package /a import com.getcapacitor.BridgeActivity;" "$MAIN" 2>/dev/null || true
+            # Add registerPlugin before super.onCreate or as a new override
+            if grep -q "onCreate" "$MAIN"; then
+              # Insert registerPlugin call at the beginning of onCreate
+              sed -i '/onCreate.*Bundle/{ n; s/^/        registerPlugin(MediaScanPlugin.class);\n/ }' "$MAIN"
+            else
+              # No onCreate — add full override
+              sed -i 's/public class \([A-Za-z]*\) extends BridgeActivity {/public class \1 extends BridgeActivity {\n    @Override\n    public void onCreate(android.os.Bundle savedInstanceState) {\n        registerPlugin(MediaScanPlugin.class);\n        super.onCreate(savedInstanceState);\n    }/' "$MAIN"
+            fi
+          fi
+
+          echo "--- Patched MainActivity ---" >> /tmp/plugin-install.log
+          cat "$MAIN" >> /tmp/plugin-install.log
+
+      # ──────────────────────────────────────────────────
+      # 8. Capacitor sync
+      # ──────────────────────────────────────────────────
       - name: Sync Capacitor
         working-directory: artifacts/web
         run: npx cap sync android 2>&1 | tee /tmp/cap-sync.log
 
+      # ──────────────────────────────────────────────────
+      # 9. Build APK
+      # ──────────────────────────────────────────────────
       - name: Make Gradle executable
         working-directory: artifacts/web/android
         run: chmod +x gradlew
@@ -120,42 +203,130 @@ NETXML
           key: ${{ runner.os }}-gradle-${{ hashFiles('artifacts/web/android/**/*.gradle*') }}
           restore-keys: ${{ runner.os }}-gradle-
 
-      - name: Build Debug APK
+      - name: Build Debug APK (with full logs)
         working-directory: artifacts/web/android
-        run: ./gradlew assembleDebug --no-daemon 2>&1 | tee /tmp/gradle-build.log
+        run: |
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --info \
+            --stacktrace \
+            2>&1 | tee /tmp/gradle-full-build.log
+          echo "=== Gradle exit: $?" >> /tmp/gradle-full-build.log
 
-      - name: Collect logs
+      # ──────────────────────────────────────────────────
+      # 10. Collect ALL logs (mandatory — always runs)
+      # ──────────────────────────────────────────────────
+      - name: Collect all build logs
         if: always()
         run: |
-          mkdir -p /tmp/seifoo-logs
-          cp /tmp/cap-add.log /tmp/seifoo-logs/ 2>/dev/null || true
-          cp /tmp/cap-sync.log /tmp/seifoo-logs/ 2>/dev/null || true
-          cp /tmp/gradle-build.log /tmp/seifoo-logs/ 2>/dev/null || true
-          echo "=== BUILD SUMMARY ===" > /tmp/seifoo-logs/summary.log
-          echo "Date: $(date)" >> /tmp/seifoo-logs/summary.log
-          echo "Commit: $GITHUB_SHA" >> /tmp/seifoo-logs/summary.log
-          APK=$(find artifacts/web/android -name "*.apk" 2>/dev/null | head -1)
-          if [ -n "$APK" ]; then
-            echo "APK: $APK" >> /tmp/seifoo-logs/summary.log
-            echo "APK Size: $(du -sh $APK | cut -f1)" >> /tmp/seifoo-logs/summary.log
-            echo "BUILD SUCCESS" >> /tmp/seifoo-logs/summary.log
-          else
-            echo "BUILD FAILED - No APK found" >> /tmp/seifoo-logs/summary.log
-          fi
+          mkdir -p /tmp/seifoo-build-logs
 
-      - name: Upload APK
+          # Copy all intermediate logs
+          for f in /tmp/cap-add.log /tmp/cap-sync.log /tmp/manifest-patch.log \
+                   /tmp/gradle-patch.log /tmp/plugin-install.log \
+                   /tmp/gradle-full-build.log; do
+            [ -f "$f" ] && cp "$f" /tmp/seifoo-build-logs/
+          done
+
+          # Gradle build scan reports
+          find ~/.gradle -name "*.log" -newer /tmp 2>/dev/null | head -20 | \
+            xargs -I{} cp {} /tmp/seifoo-build-logs/ 2>/dev/null || true
+
+          # APK info
+          APK=$(find artifacts/web/android -name "app-debug.apk" 2>/dev/null | head -1)
+          {
+            echo "=============================="
+            echo " seifoo APK Build Summary"
+            echo "=============================="
+            echo "Date       : $(date -u)"
+            echo "Commit     : $GITHUB_SHA"
+            echo "Branch     : $GITHUB_REF_NAME"
+            echo "Runner OS  : ${{ runner.os }}"
+            echo "Java       : $(java -version 2>&1 | head -1)"
+            echo "Node       : $(node --version)"
+            echo "pnpm       : $(pnpm --version)"
+            echo ""
+            if [ -n "$APK" ] && [ -f "$APK" ]; then
+              echo "STATUS     : ✅ BUILD SUCCESS"
+              echo "APK path   : $APK"
+              echo "APK size   : $(du -sh "$APK" | cut -f1)"
+              echo ""
+              # List APK contents summary
+              echo "APK contents (top-level):"
+              unzip -l "$APK" 2>/dev/null | head -40 || true
+            else
+              echo "STATUS     : ❌ BUILD FAILED (no APK found)"
+              echo ""
+              echo "--- Last 100 lines of Gradle log ---"
+              tail -100 /tmp/gradle-full-build.log 2>/dev/null || echo "(no gradle log)"
+            fi
+          } | tee /tmp/seifoo-build-logs/SUMMARY.txt
+
+          # Java compilation errors (most useful for debugging)
+          grep -n "error:" /tmp/gradle-full-build.log 2>/dev/null | \
+            head -50 > /tmp/seifoo-build-logs/COMPILE_ERRORS.txt || true
+
+          # Warnings
+          grep -n "warning:" /tmp/gradle-full-build.log 2>/dev/null | \
+            head -100 > /tmp/seifoo-build-logs/COMPILE_WARNINGS.txt || true
+
+          echo "Logs collected: $(ls /tmp/seifoo-build-logs/ | wc -l) files"
+          cat /tmp/seifoo-build-logs/SUMMARY.txt
+
+      # ──────────────────────────────────────────────────
+      # 11. Upload artifacts (ALWAYS — mandatory)
+      # ──────────────────────────────────────────────────
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: seifoo-debug-apk
+          name: seifoo-debug-${{ github.run_number }}-${{ github.sha }}
           path: artifacts/web/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: warn
-          retention-days: 30
+          retention-days: 60
 
-      - name: Upload build logs
+      - name: Upload full build logs (mandatory)
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: build-logs
-          path: /tmp/seifoo-logs/
-          retention-days: 14
+          name: build-logs-${{ github.run_number }}
+          path: /tmp/seifoo-build-logs/
+          if-no-files-found: ignore
+          retention-days: 60
+
+      - name: Upload Gradle reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gradle-reports-${{ github.run_number }}
+          path: |
+            artifacts/web/android/app/build/reports/
+            artifacts/web/android/build/reports/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # ──────────────────────────────────────────────────
+      # 12. Job summary
+      # ──────────────────────────────────────────────────
+      - name: Write job summary
+        if: always()
+        run: |
+          APK=$(find artifacts/web/android -name "app-debug.apk" 2>/dev/null | head -1)
+          echo "## 📱 seifoo APK Build" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`$GITHUB_SHA\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`$GITHUB_REF_NAME\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Run | #${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
+          if [ -n "$APK" ] && [ -f "$APK" ]; then
+            SIZE=$(du -sh "$APK" | cut -f1)
+            echo "| Status | ✅ SUCCESS |" >> $GITHUB_STEP_SUMMARY
+            echo "| APK Size | $SIZE |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "⬇️ Download from the **Artifacts** section above." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Status | ❌ FAILED |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Check **build-logs** artifact for details." >> $GITHUB_STEP_SUMMARY
+          fi
