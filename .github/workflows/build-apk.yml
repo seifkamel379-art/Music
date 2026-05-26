@@ -249,14 +249,9 @@ jobs:
 
           # ── Adaptive icon XML (black background + our foreground) ──
           mkdir -p "$RES/mipmap-anydpi-v26"
+          ADAPTIVE_XML='<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n    <background android:drawable="@color/ic_launcher_background"/>\n    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n</adaptive-icon>'
           for NAME in ic_launcher ic_launcher_round; do
-            cat > "$RES/mipmap-anydpi-v26/${NAME}.xml" <<'XMLEOF'
-<?xml version="1.0" encoding="utf-8"?>
-<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@color/ic_launcher_background"/>
-    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
-</adaptive-icon>
-XMLEOF
+            printf '%b\n' "$ADAPTIVE_XML" > "$RES/mipmap-anydpi-v26/${NAME}.xml"
           done
 
           # ── Background color resource ──
@@ -266,12 +261,7 @@ XMLEOF
               sed -i 's|</resources>|    <color name="ic_launcher_background">#000000</color>\n</resources>|' "$RES/values/colors.xml"
             fi
           else
-            cat > "$RES/values/colors.xml" <<'XMLEOF'
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <color name="ic_launcher_background">#000000</color>
-</resources>
-XMLEOF
+            printf '%b\n' '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="ic_launcher_background">#000000</color>\n</resources>' > "$RES/values/colors.xml"
           fi
 
           # ── Splash screen (black bg + logo centered) ──
