@@ -1,0 +1,161 @@
+name: Build seifoo APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web app
+        working-directory: artifacts/web
+        env:
+          VITE_WORKER_URL: ${{ secrets.VITE_WORKER_URL }}
+          VITE_WORKER_AUTH_KEY: ${{ secrets.VITE_WORKER_AUTH_KEY }}
+          BASE_PATH: /
+        run: pnpm run build
+
+      - name: Add Android platform
+        working-directory: artifacts/web
+        run: npx cap add android 2>&1 | tee /tmp/cap-add.log || true
+
+      - name: Apply Android patches
+        working-directory: artifacts/web
+        run: |
+          # Permissions in AndroidManifest.xml
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          if [ -f "$MANIFEST" ]; then
+            sed -i '/<manifest /a\    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />' "$MANIFEST"
+          fi
+
+          # Enable cleartext traffic + usesCleartextTraffic
+          if [ -f "$MANIFEST" ]; then
+            sed -i 's/android:usesCleartextTraffic="false"/android:usesCleartextTraffic="true"/' "$MANIFEST" || true
+            sed -i '/<application/s/>$/ android:usesCleartextTraffic="true">/' "$MANIFEST" 2>/dev/null || true
+          fi
+
+          # Set hardware acceleration
+          if [ -f "android/app/src/main/res/xml/network_security_config.xml" ]; then
+            echo "Network security config exists"
+          else
+            mkdir -p android/app/src/main/res/xml
+            cat > android/app/src/main/res/xml/network_security_config.xml << 'NETXML'
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system"/>
+        </trust-anchors>
+    </base-config>
+</network-security-config>
+NETXML
+          fi
+
+      - name: Copy MediaStore plugin
+        working-directory: artifacts/web
+        run: |
+          JAVA_DIR="android/app/src/main/java/io/seifoo/app"
+          mkdir -p "$JAVA_DIR"
+          cp ../../.github/android-patches/MediaScanPlugin.java "$JAVA_DIR/MediaScanPlugin.java" 2>/dev/null || true
+          cp ../../.github/android-patches/patch-mainactivity.sh /tmp/patch-mainactivity.sh 2>/dev/null || true
+          if [ -f "/tmp/patch-mainactivity.sh" ]; then
+            chmod +x /tmp/patch-mainactivity.sh
+            bash /tmp/patch-mainactivity.sh "$JAVA_DIR"
+          fi
+
+      - name: Sync Capacitor
+        working-directory: artifacts/web
+        run: npx cap sync android 2>&1 | tee /tmp/cap-sync.log
+
+      - name: Make Gradle executable
+        working-directory: artifacts/web/android
+        run: chmod +x gradlew
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('artifacts/web/android/**/*.gradle*') }}
+          restore-keys: ${{ runner.os }}-gradle-
+
+      - name: Build Debug APK
+        working-directory: artifacts/web/android
+        run: ./gradlew assembleDebug --no-daemon 2>&1 | tee /tmp/gradle-build.log
+
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p /tmp/seifoo-logs
+          cp /tmp/cap-add.log /tmp/seifoo-logs/ 2>/dev/null || true
+          cp /tmp/cap-sync.log /tmp/seifoo-logs/ 2>/dev/null || true
+          cp /tmp/gradle-build.log /tmp/seifoo-logs/ 2>/dev/null || true
+          echo "=== BUILD SUMMARY ===" > /tmp/seifoo-logs/summary.log
+          echo "Date: $(date)" >> /tmp/seifoo-logs/summary.log
+          echo "Commit: $GITHUB_SHA" >> /tmp/seifoo-logs/summary.log
+          APK=$(find artifacts/web/android -name "*.apk" 2>/dev/null | head -1)
+          if [ -n "$APK" ]; then
+            echo "APK: $APK" >> /tmp/seifoo-logs/summary.log
+            echo "APK Size: $(du -sh $APK | cut -f1)" >> /tmp/seifoo-logs/summary.log
+            echo "BUILD SUCCESS" >> /tmp/seifoo-logs/summary.log
+          else
+            echo "BUILD FAILED - No APK found" >> /tmp/seifoo-logs/summary.log
+          fi
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: seifoo-debug-apk
+          path: artifacts/web/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload build logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-logs
+          path: /tmp/seifoo-logs/
+          retention-days: 14

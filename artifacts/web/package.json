@@ -7,7 +7,9 @@
     "dev": "vite --config vite.config.ts --host 0.0.0.0",
     "build": "vite build --config vite.config.ts",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "cap:build": "pnpm run build && npx cap sync android",
+    "cap:open": "npx cap open android"
   },
   "devDependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -75,6 +77,12 @@
     "zod": "catalog:"
   },
   "dependencies": {
+    "@capacitor/android": "^7.2.0",
+    "@capacitor/cli": "^7.2.0",
+    "@capacitor/core": "^7.2.0",
+    "@capacitor/filesystem": "^7.0.1",
+    "@capacitor/local-notifications": "^7.0.1",
+    "@capacitor/splash-screen": "^7.0.0",
     "hls.js": "^1.6.16"
   }
 }

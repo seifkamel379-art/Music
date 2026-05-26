@@ -1,5 +1,10 @@
+/* Audio Player — 100% native <audio>, no YouTube iframe.
+ * Online tracks: resolved via Cloudflare Worker → direct URL → <audio>
+ * Local tracks:  blob URL directly → <audio>
+ * Enables true background playback + Media Session lock-screen controls.
+ */
 import React, { createContext, useContext, useEffect, useRef, useState, useMemo, useCallback } from "react";
-import { ytPlayer } from "../lib/youtube-iframe";
+import { resolveStreamUrl } from "../lib/streamer";
 
 export type Track = {
   videoId: string;
@@ -31,214 +36,147 @@ type AudioPlayerCtx = {
 
 const Ctx = createContext<AudioPlayerCtx | null>(null);
 
-/* ── Media Session helper ─────────────────────────────────────────────────── */
 function updateMediaSession(track: Track | null, playing: boolean) {
   if (!("mediaSession" in navigator)) return;
   if (!track) { navigator.mediaSession.metadata = null; return; }
   navigator.mediaSession.metadata = new MediaMetadata({
     title: track.title,
     artist: track.artist,
-    album: "music&sk",
+    album: "seifoo",
     artwork: track.thumbnail
       ? [
           { src: track.thumbnail, sizes: "480x480", type: "image/jpeg" },
           { src: track.thumbnail, sizes: "512x512", type: "image/jpeg" },
         ]
-      : [{ src: "/logo.png", sizes: "192x192", type: "image/png" }],
+      : [{ src: "/logo.png", sizes: "512x512", type: "image/png" }],
   });
   navigator.mediaSession.playbackState = playing ? "playing" : "paused";
 }
 
-/* ── Provider ─────────────────────────────────────────────────────────────── */
+function updatePositionState(currentTime: number, duration: number) {
+  if (!("mediaSession" in navigator)) return;
+  if (!isFinite(duration) || duration <= 0) return;
+  try {
+    navigator.mediaSession.setPositionState?.({ duration, playbackRate: 1, position: Math.min(currentTime, duration) });
+  } catch {}
+}
+
 export function AudioPlayerProvider({ children }: { children: React.ReactNode }) {
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [queue, setQueue] = useState<Track[]>([]);
-  const [status, setStatus] = useState<Status>({
-    playing: false, currentTime: 0, duration: 0, isBuffering: false,
-  });
+  const [status, setStatus] = useState<Status>({ playing: false, currentTime: 0, duration: 0, isBuffering: false });
 
-  const localAudioRef = useRef<HTMLAudioElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const currentIdxRef = useRef(0);
   const queueRef = useRef<Track[]>([]);
   const currentTrackRef = useRef<Track | null>(null);
-  const usingLocalRef = useRef(false);
+  const resolveAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => { queueRef.current = queue; }, [queue]);
   useEffect(() => { currentTrackRef.current = currentTrack; }, [currentTrack]);
 
-  /* ── Local file <audio> element (only used for device tracks) ──────────── */
-  const getLocalAudio = useCallback((): HTMLAudioElement => {
-    if (!localAudioRef.current) {
-      const audio = new Audio();
-      audio.preload = "auto";
+  const getAudio = useCallback((): HTMLAudioElement => {
+    if (audioRef.current) return audioRef.current;
+    const audio = new Audio();
+    audio.preload = "auto";
 
-      audio.addEventListener("play", () => {
-        if (!usingLocalRef.current) return;
-        setStatus(s => ({ ...s, playing: true, isBuffering: false }));
-        updateMediaSession(currentTrackRef.current, true);
-      });
-      audio.addEventListener("pause", () => {
-        if (!usingLocalRef.current) return;
-        setStatus(s => ({ ...s, playing: false }));
-        updateMediaSession(currentTrackRef.current, false);
-      });
-      audio.addEventListener("waiting", () => {
-        if (!usingLocalRef.current) return;
-        setStatus(s => ({ ...s, isBuffering: true }));
-      });
-      audio.addEventListener("canplay", () => {
-        if (!usingLocalRef.current) return;
-        setStatus(s => ({ ...s, isBuffering: false }));
-      });
-      audio.addEventListener("timeupdate", () => {
-        if (!usingLocalRef.current) return;
-        const a = localAudioRef.current;
-        if (!a) return;
-        setStatus(s => ({ ...s, currentTime: a.currentTime }));
-      });
-      audio.addEventListener("durationchange", () => {
-        if (!usingLocalRef.current) return;
-        const a = localAudioRef.current;
-        if (!a) return;
-        setStatus(s => ({ ...s, duration: isFinite(a.duration) ? a.duration : 0 }));
-      });
-      audio.addEventListener("ended", () => {
-        if (!usingLocalRef.current) return;
-        const next = currentIdxRef.current + 1;
-        const q = queueRef.current;
-        if (next < q.length) {
-          currentIdxRef.current = next;
-          loadAndPlay(q[next]);
-        } else {
-          setStatus(s => ({ ...s, playing: false }));
-          updateMediaSession(currentTrackRef.current, false);
-        }
-      });
-      audio.addEventListener("error", () => {
-        if (!usingLocalRef.current) return;
-        setStatus(s => ({ ...s, isBuffering: false, playing: false }));
-        updateMediaSession(currentTrackRef.current, false);
-      });
+    audio.addEventListener("play", () => {
+      setStatus(s => ({ ...s, playing: true, isBuffering: false }));
+      updateMediaSession(currentTrackRef.current, true);
+    });
+    audio.addEventListener("pause", () => {
+      setStatus(s => ({ ...s, playing: false }));
+      updateMediaSession(currentTrackRef.current, false);
+    });
+    audio.addEventListener("waiting", () => setStatus(s => ({ ...s, isBuffering: true })));
+    audio.addEventListener("playing", () => setStatus(s => ({ ...s, isBuffering: false })));
+    audio.addEventListener("canplay", () => setStatus(s => ({ ...s, isBuffering: false })));
+    audio.addEventListener("timeupdate", () => {
+      const a = audioRef.current; if (!a) return;
+      const ct = a.currentTime;
+      const dur = isFinite(a.duration) ? a.duration : 0;
+      setStatus(s => ({ ...s, currentTime: ct, duration: dur }));
+      updatePositionState(ct, dur);
+    });
+    audio.addEventListener("durationchange", () => {
+      const a = audioRef.current; if (!a) return;
+      const dur = isFinite(a.duration) ? a.duration : 0;
+      setStatus(s => ({ ...s, duration: dur }));
+    });
+    audio.addEventListener("ended", () => {
+      const next = currentIdxRef.current + 1;
+      const q = queueRef.current;
+      if (next < q.length) { currentIdxRef.current = next; loadAndPlay(q[next]); }
+      else { setStatus(s => ({ ...s, playing: false })); updateMediaSession(currentTrackRef.current, false); }
+    });
+    audio.addEventListener("error", (e) => {
+      console.error("[player] audio error", e);
+      setStatus(s => ({ ...s, isBuffering: false, playing: false }));
+    });
 
-      localAudioRef.current = audio;
-    }
-    return localAudioRef.current;
+    audioRef.current = audio;
+    return audio;
   }, []);
 
-  /* ── YouTube iframe events ─────────────────────────────────────────────── */
-  useEffect(() => {
-    const offState = ytPlayer.on("stateChange", (s) => {
-      if (usingLocalRef.current) return;
-      if (s === "playing") {
-        setStatus(st => ({ ...st, playing: true, isBuffering: false }));
-        updateMediaSession(currentTrackRef.current, true);
-      } else if (s === "paused") {
-        setStatus(st => ({ ...st, playing: false }));
-        updateMediaSession(currentTrackRef.current, false);
-      } else if (s === "buffering") {
-        setStatus(st => ({ ...st, isBuffering: true }));
-      } else if (s === "ended") {
-        const next = currentIdxRef.current + 1;
-        const q = queueRef.current;
-        if (next < q.length) {
-          currentIdxRef.current = next;
-          loadAndPlay(q[next]);
-        } else {
-          setStatus(st => ({ ...st, playing: false }));
-          updateMediaSession(currentTrackRef.current, false);
-        }
-      } else if (s === "error") {
-        setStatus(st => ({ ...st, playing: false, isBuffering: false }));
-      }
-    });
-
-    const offTime = ytPlayer.on("timeUpdate", ({ currentTime, duration }) => {
-      if (usingLocalRef.current) return;
-      setStatus(st => ({ ...st, currentTime, duration }));
-      if ("mediaSession" in navigator && duration > 0) {
-        try {
-          navigator.mediaSession.setPositionState?.({
-            duration, playbackRate: 1, position: currentTime,
-          });
-        } catch {}
-      }
-    });
-
-    const offErr = ytPlayer.on("error", (msg) => {
-      console.error("[player] yt error:", msg);
-    });
-
-    return () => { offState(); offTime(); offErr(); };
-  }, []);
-
-  /* ── Media Session controls ────────────────────────────────────────────── */
   useEffect(() => {
     if (!("mediaSession" in navigator)) return;
-    navigator.mediaSession.setActionHandler("play", () => {
-      if (usingLocalRef.current) localAudioRef.current?.play().catch(() => {});
-      else ytPlayer.resume();
-    });
-    navigator.mediaSession.setActionHandler("pause", () => {
-      if (usingLocalRef.current) localAudioRef.current?.pause();
-      else ytPlayer.pause();
-    });
+    navigator.mediaSession.setActionHandler("play", () => getAudio().play().catch(() => {}));
+    navigator.mediaSession.setActionHandler("pause", () => getAudio().pause());
     navigator.mediaSession.setActionHandler("nexttrack", () => {
       const next = currentIdxRef.current + 1;
       const q = queueRef.current;
       if (next < q.length) { currentIdxRef.current = next; loadAndPlay(q[next]); }
     });
     navigator.mediaSession.setActionHandler("previoustrack", () => {
-      if (usingLocalRef.current) {
-        const a = localAudioRef.current;
-        if (a && a.currentTime > 3) { a.currentTime = 0; return; }
-      } else if (ytPlayer.getCurrentTime() > 3) {
-        ytPlayer.seekTo(0);
-        return;
-      }
+      const a = audioRef.current;
+      if (a && a.currentTime > 3) { a.currentTime = 0; return; }
       const prev = currentIdxRef.current - 1;
       const q = queueRef.current;
       if (prev >= 0) { currentIdxRef.current = prev; loadAndPlay(q[prev]); }
     });
     navigator.mediaSession.setActionHandler("seekto", d => {
       if (d.seekTime === undefined) return;
-      if (usingLocalRef.current && localAudioRef.current) {
-        localAudioRef.current.currentTime = d.seekTime;
-      } else {
-        ytPlayer.seekTo(d.seekTime);
-      }
+      const a = audioRef.current; if (a) a.currentTime = d.seekTime;
     });
-  }, []);
+    navigator.mediaSession.setActionHandler("seekbackward", d => {
+      const a = audioRef.current; if (a) a.currentTime = Math.max(0, a.currentTime - (d.seekOffset ?? 10));
+    });
+    navigator.mediaSession.setActionHandler("seekforward", d => {
+      const a = audioRef.current; if (a) a.currentTime = Math.min(a.duration || 0, a.currentTime + (d.seekOffset ?? 10));
+    });
+  }, [getAudio]);
 
-  function loadAndPlay(track: Track) {
+  async function loadAndPlay(track: Track) {
+    resolveAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    resolveAbortRef.current = ctrl;
+
     setCurrentTrack(track);
     setStatus({ playing: false, currentTime: 0, duration: 0, isBuffering: true });
     updateMediaSession(track, false);
 
-    if (track.localUrl) {
-      // Stop any YT playback and use local <audio>
-      try { ytPlayer.stop(); } catch {}
-      usingLocalRef.current = true;
-      const audio = getLocalAudio();
-      audio.pause();
-      audio.src = track.localUrl;
+    const audio = getAudio();
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+
+    try {
+      let src: string;
+      if (track.localUrl) {
+        src = track.localUrl;
+      } else {
+        const { url } = await resolveStreamUrl(track.videoId);
+        if (ctrl.signal.aborted) return;
+        src = url;
+      }
+      audio.src = src;
       audio.load();
-      audio.play().catch(e => {
-        console.error("[player] local playback error:", e);
-        setStatus(s => ({ ...s, isBuffering: false, playing: false }));
-      });
-      return;
-    }
-
-    // Stop any local audio and use hidden YouTube iframe
-    if (localAudioRef.current) {
-      try { localAudioRef.current.pause(); localAudioRef.current.src = ""; } catch {}
-    }
-    usingLocalRef.current = false;
-
-    ytPlayer.play(track.videoId).catch(e => {
-      console.error("[player] yt playback error:", e);
+      await audio.play();
+    } catch (e: any) {
+      if (ctrl.signal.aborted) return;
+      console.error("[player] playback error:", e);
       setStatus(s => ({ ...s, isBuffering: false, playing: false }));
-    });
+    }
   }
 
   function playTrack(track: Track, newQueue?: Track[]) {
@@ -255,15 +193,9 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   }
 
   function pauseOrResume() {
-    if (usingLocalRef.current) {
-      const a = localAudioRef.current;
-      if (!a) return;
-      if (status.playing) a.pause();
-      else a.play().catch(() => {});
-    } else {
-      if (status.playing) ytPlayer.pause();
-      else ytPlayer.resume();
-    }
+    const a = audioRef.current; if (!a) return;
+    if (status.playing) a.pause();
+    else a.play().catch(() => {});
   }
 
   function playNext() {
@@ -273,41 +205,28 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   }
 
   function playPrev() {
-    if (usingLocalRef.current) {
-      const a = localAudioRef.current;
-      if (a && a.currentTime > 3) { a.currentTime = 0; return; }
-    } else if (ytPlayer.getCurrentTime() > 3) {
-      ytPlayer.seekTo(0);
-      return;
-    }
+    const a = audioRef.current;
+    if (a && a.currentTime > 3) { a.currentTime = 0; return; }
     const prev = currentIdxRef.current - 1;
     const q = queueRef.current;
     if (prev >= 0) { currentIdxRef.current = prev; loadAndPlay(q[prev]); }
   }
 
   function seekTo(seconds: number) {
-    if (!isFinite(seconds) || seconds < 0) return;
-    if (usingLocalRef.current && localAudioRef.current) {
-      localAudioRef.current.currentTime = seconds;
-    } else {
-      ytPlayer.seekTo(seconds);
-    }
-    if ("mediaSession" in navigator && status.duration > 0) {
-      try {
-        navigator.mediaSession.setPositionState?.({
-          duration: status.duration, playbackRate: 1, position: seconds,
-        });
-      } catch {}
-    }
+    const a = audioRef.current;
+    if (!a || !isFinite(seconds)) return;
+    a.currentTime = Math.max(0, seconds);
+    updatePositionState(seconds, a.duration || 0);
   }
 
   function clearPlayer() {
-    try { ytPlayer.stop(); } catch {}
-    if (localAudioRef.current) { localAudioRef.current.pause(); localAudioRef.current.src = ""; }
-    usingLocalRef.current = false;
+    resolveAbortRef.current?.abort();
+    const a = audioRef.current;
+    if (a) { a.pause(); a.removeAttribute("src"); a.load(); }
     setCurrentTrack(null);
     setQueue([]);
     queueRef.current = [];
+    currentIdxRef.current = 0;
     setStatus({ playing: false, currentTime: 0, duration: 0, isBuffering: false });
     updateMediaSession(null, false);
   }

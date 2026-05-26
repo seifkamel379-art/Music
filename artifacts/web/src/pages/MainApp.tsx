@@ -6,6 +6,8 @@ import { useAudioPlayer } from "@/contexts/AudioPlayerContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import MiniPlayer from "@/components/MiniPlayer";
 import PlayerModal from "@/components/PlayerModal";
+import { downloadTrack } from "@/lib/downloader";
+import { scanAllDeviceAudio } from "@/lib/mediascan";
 
 type Tab = "home" | "search" | "library" | "device";
 type DeviceTrack = { id: string; title: string; artist: string; url: string };
@@ -166,54 +168,17 @@ export default function MainApp({ userName, onLogout }: Props) {
   const isFav = useCallback((id: string) => favorites.some(t => t.videoId === id), [favorites]);
 
   async function handleDownload(track: Track) {
-    if (track.localUrl) {
-      const a = document.createElement("a");
-      a.href = track.localUrl;
-      a.download = `${track.title}.mp3`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      return;
-    }
-
-    if (!track.videoId) {
-      showToast("لا يمكن تحميل هذا المقطع");
-      return;
-    }
-
     if (downloadingIds.has(track.videoId)) return;
     setDownloadingIds(prev => new Set([...prev, track.videoId]));
-
-    try {
-      showToast("جارٍ تحضير التحميل...");
-      const res = await fetch(`/api/music/download?id=${encodeURIComponent(track.videoId)}`);
-      if (!res.ok) {
-        showToast("فشل تحضير الملف، جرّب تاني");
-        return;
-      }
-      const data = await res.json() as { url?: string };
-      if (!data.url) {
-        showToast("فشل تحضير الملف");
-        return;
-      }
-      const a = document.createElement("a");
-      a.href = data.url;
-      a.download = `${track.title}.mp3`;
-      a.rel = "noopener";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      showToast("بدأ التحميل");
-    } catch (e) {
-      console.error("[download] error:", e);
-      showToast("فشل التحميل، جرّب تاني");
-    } finally {
-      setDownloadingIds(prev => {
-        const next = new Set(prev);
-        next.delete(track.videoId);
-        return next;
-      });
-    }
+    showToast("جارٍ تحضير التحميل...");
+    await downloadTrack(track.videoId, track.title, track.localUrl, (p) => {
+      if (p.phase === "resolving") showToast("جارٍ الاتصال...");
+      else if (p.phase === "downloading") showToast("جارٍ التحميل...");
+      else if (p.phase === "saving") showToast("جارٍ الحفظ...");
+      else if (p.phase === "done") showToast(p.filePath ? `✅ محفوظ في: ${p.filePath}` : "✅ تم التحميل");
+      else if (p.phase === "error") showToast(`❌ ${p.error ?? "فشل التحميل"}`);
+    });
+    setDownloadingIds(prev => { const next = new Set(prev); next.delete(track.videoId); return next; });
   }
 
   // Load saved device files from IndexedDB on mount.
@@ -295,6 +260,35 @@ export default function MainApp({ userName, onLogout }: Props) {
     setQuery(q);
     const h = [q, ...history.filter(x => x !== q)].slice(0, 20);
     setHistory(h); storage.setHistory(h);
+  }
+
+  async function handleScanAll() {
+    showToast("جارٍ مسح أغاني الجهاز...");
+    try {
+      const found = await scanAllDeviceAudio();
+      if (!found.length) {
+        showToast("لم يتم العثور على أغاني أو تم رفض الإذن");
+        return;
+      }
+      const existing = new Set(deviceTracks.map(t => t.id));
+      const newTracks: DeviceTrack[] = [];
+      for (const f of found) {
+        if (existing.has(f.id)) continue;
+        newTracks.push({ id: f.id, title: f.title, artist: f.artist, url: f.uri });
+      }
+      if (!newTracks.length) {
+        showToast("جميع الأغاني مضافة بالفعل");
+        return;
+      }
+      setDeviceTracks(prev => {
+        const next = [...prev, ...newTracks];
+        storage.setDeviceMeta(next.map(t => ({ id: t.id, title: t.title, artist: t.artist })));
+        return next;
+      });
+      showToast(`✅ تمت إضافة ${newTracks.length} أغنية`);
+    } catch (e: any) {
+      showToast(`❌ ${e?.message ?? "فشل المسح"}`);
+    }
   }
 
   const hasPlayer = !!currentTrack;
@@ -401,6 +395,7 @@ export default function MainApp({ userName, onLogout }: Props) {
             colors={colors}
             currentTrack={currentTrack}
             onAdd={() => fileInputRef.current?.click()}
+            onScanAll={handleScanAll}
             onPlay={playDevice}
             onRemove={removeDeviceTrack}
           />
@@ -819,10 +814,10 @@ function LibraryTab({ playlist, favorites, colors, currentTrack, isFav, download
 }
 
 /* ===================== DEVICE TAB ===================== */
-function DeviceTab({ tracks, colors, currentTrack, onAdd, onPlay, onRemove }: any) {
+function DeviceTab({ tracks, colors, currentTrack, onAdd, onScanAll, onPlay, onRemove }: any) {
   return (
     <div style={{ paddingTop: 52, direction: "rtl" }}>
-      <div style={{ padding: "0 16px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ padding: "0 16px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <div style={{ color: colors.foreground, fontSize: 22, fontWeight: 700 }}>موسيقى جهازي</div>
           <div style={{ color: colors.mutedForeground, fontSize: 12, marginTop: 4 }}>تشغيل محلي - لا ترسل لأي مكان</div>
@@ -832,11 +827,29 @@ function DeviceTab({ tracks, colors, currentTrack, onAdd, onPlay, onRemove }: an
         </button>
       </div>
 
+      {/* Scan all device music button */}
+      <div style={{ padding: "0 16px 16px" }}>
+        <button
+          onClick={onScanAll}
+          style={{
+            width: "100%", padding: "12px 16px", borderRadius: 14,
+            background: "rgba(29,185,84,0.12)", border: "1.5px solid rgba(29,185,84,0.35)",
+            cursor: "pointer", display: "flex", alignItems: "center", gap: 12,
+            color: "#1DB954", fontSize: 15, fontWeight: 700, direction: "rtl",
+            transition: "background 0.15s",
+          }}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          جلب كل أغاني الجهاز
+          <span style={{ marginRight: "auto", fontSize: 12, color: "rgba(29,185,84,0.7)", fontWeight: 500 }}>APK فقط</span>
+        </button>
+      </div>
+
       {tracks.length === 0 && (
-        <div style={{ padding: "40px 16px", textAlign: "center" }}>
+        <div style={{ padding: "32px 16px", textAlign: "center" }}>
           <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke={colors.mutedForeground} strokeWidth="1.2" style={{ margin: "0 auto 16px", display: "block" }}><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M9 13h6M9 17h4M9 9h6"/></svg>
           <div style={{ color: colors.foreground, fontWeight: 700, fontSize: 18, marginBottom: 8 }}>لا توجد ملفات</div>
-          <div style={{ color: colors.mutedForeground, fontSize: 14, marginBottom: 24, lineHeight: "20px" }}>اضغط + لإضافة ملفات صوتية من جهازك</div>
+          <div style={{ color: colors.mutedForeground, fontSize: 14, marginBottom: 24, lineHeight: "20px" }}>اضغط + لإضافة ملفات صوتية، أو استخدم "جلب كل أغاني الجهاز" في الـ APK</div>
           <button onClick={onAdd} style={{ padding: "14px 32px", borderRadius: 999, background: "#1DB954", border: "none", cursor: "pointer", color: "#000", fontSize: 16, fontWeight: 700 }}>
             إضافة ملفات
           </button>
