@@ -1,0 +1,4 @@
+85:FAILURE: Build failed with an exception.
+87:* What went wrong:
+88:Execution failed for task ':app:processDebugMainManifest'.
+100:org.gradle.api.tasks.TaskExecutionException: Execution failed for task ':app:processDebugMainManifest'.

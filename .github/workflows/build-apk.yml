@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  MIN_SDK: 21
+  MIN_SDK: 23
   TARGET_SDK: 35
   COMPILE_SDK: 35
 
