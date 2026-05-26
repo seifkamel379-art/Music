@@ -141,16 +141,22 @@ jobs:
       - name: Install MediaScan plugin
         working-directory: artifacts/web
         run: |
-          # Detect the app package directory
-          PKG_DIR=$(find android/app/src/main/java -type d | head -1)
+          # Detect the app package directory by finding MainActivity.java directly
+          MAIN_FILE=$(find android/app/src/main/java -name "MainActivity.java" | head -1)
+          if [ -z "$MAIN_FILE" ]; then
+            echo "ERROR: MainActivity.java not found under android/app/src/main/java" | tee /tmp/plugin-install.log
+            find android/app/src/main/java -type f | tee -a /tmp/plugin-install.log
+            exit 1
+          fi
+          PKG_DIR=$(dirname "$MAIN_FILE")
           echo "Package dir: $PKG_DIR" | tee /tmp/plugin-install.log
+          echo "MainActivity: $MAIN_FILE" >> /tmp/plugin-install.log
 
-          mkdir -p "$PKG_DIR"
           cp ../../.github/android-patches/MediaScanPlugin.java "$PKG_DIR/MediaScanPlugin.java"
           echo "Copied MediaScanPlugin.java to $PKG_DIR" >> /tmp/plugin-install.log
 
           # Fix package name to match actual package
-          PACKAGE=$(grep -r "^package " "$PKG_DIR/MainActivity.java" 2>/dev/null | head -1 | sed 's/package //;s/;//')
+          PACKAGE=$(grep "^package " "$MAIN_FILE" | head -1 | sed 's/package //;s/;//')
           if [ -n "$PACKAGE" ]; then
             sed -i "s/^package io.seifoo.app;/package $PACKAGE;/" "$PKG_DIR/MediaScanPlugin.java"
             sed -i "s/^class ContentUris/class ContentUrisHelper/" "$PKG_DIR/MediaScanPlugin.java" || true
@@ -158,7 +164,7 @@ jobs:
           fi
 
           # Patch MainActivity to register the plugin
-          MAIN="$PKG_DIR/MainActivity.java"
+          MAIN="$MAIN_FILE"
           echo "--- Original MainActivity ---" >> /tmp/plugin-install.log
           cat "$MAIN" >> /tmp/plugin-install.log
 
