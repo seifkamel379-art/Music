@@ -181,6 +181,19 @@ jobs:
           cat "$MAIN" >> /tmp/plugin-install.log
 
       # ──────────────────────────────────────────────────
+      # 7b. Install AudioForegroundService + AudioServicePlugin
+      #     (Foreground Service + MediaSession + NotificationCompat.MediaStyle)
+      # ──────────────────────────────────────────────────
+      - name: Install Audio Foreground Service
+        working-directory: artifacts/web
+        run: |
+          chmod +x ../../.github/android-patches/patch-audio-service.sh
+          bash ../../.github/android-patches/patch-audio-service.sh \
+               "$(pwd)" \
+               "$(pwd)/../../.github/android-patches" \
+               2>&1 | tee /tmp/audio-service-patch.log
+
+      # ──────────────────────────────────────────────────
       # 8. Capacitor sync
       # ──────────────────────────────────────────────────
       - name: Sync Capacitor
@@ -224,6 +237,7 @@ jobs:
           # Copy all intermediate logs
           for f in /tmp/cap-add.log /tmp/cap-sync.log /tmp/manifest-patch.log \
                    /tmp/gradle-patch.log /tmp/plugin-install.log \
+                   /tmp/audio-service-patch.log \
                    /tmp/gradle-full-build.log; do
             [ -f "$f" ] && cp "$f" /tmp/seifoo-build-logs/
           done
