@@ -210,6 +210,88 @@ jobs:
         run: npx cap sync android 2>&1 | tee /tmp/cap-sync.log
 
       # ──────────────────────────────────────────────────
+      # 8b. Generate app icons + splash screen from logo.png
+      # ──────────────────────────────────────────────────
+      - name: Generate branded icons and splash screen
+        working-directory: artifacts/web
+        run: |
+          set -e
+          LOGO="public/logo.png"
+          RES="android/app/src/main/res"
+
+          echo "Logo info: $(file $LOGO)"
+
+          # ── Standard legacy icons (black background + logo centered) ──
+          for ENTRY in "mipmap-mdpi:48" "mipmap-hdpi:72" "mipmap-xhdpi:96" "mipmap-xxhdpi:144" "mipmap-xxxhdpi:192"; do
+            DIR="${ENTRY%:*}"
+            SIZE="${ENTRY#*:}"
+            PAD=$(( SIZE / 8 ))
+            INNER=$(( SIZE - PAD * 2 ))
+            convert -size ${SIZE}x${SIZE} xc:"#000000" \
+              \( "$LOGO" -resize ${INNER}x${INNER} \) \
+              -gravity Center -composite \
+              "$RES/$DIR/ic_launcher.png"
+            cp "$RES/$DIR/ic_launcher.png" "$RES/$DIR/ic_launcher_round.png"
+            echo "  ✓ $DIR ${SIZE}x${SIZE}"
+          done
+
+          # ── Adaptive icon foreground (transparent bg, logo in safe zone) ──
+          for ENTRY in "mipmap-mdpi:108" "mipmap-hdpi:162" "mipmap-xhdpi:216" "mipmap-xxhdpi:324" "mipmap-xxxhdpi:432"; do
+            DIR="${ENTRY%:*}"
+            SIZE="${ENTRY#*:}"
+            INNER=$(( SIZE * 55 / 100 ))
+            convert -size ${SIZE}x${SIZE} xc:none \
+              \( "$LOGO" -resize ${INNER}x${INNER} \) \
+              -gravity Center -composite \
+              "$RES/$DIR/ic_launcher_foreground.png"
+            echo "  ✓ $DIR foreground ${SIZE}x${SIZE}"
+          done
+
+          # ── Adaptive icon XML (black background + our foreground) ──
+          mkdir -p "$RES/mipmap-anydpi-v26"
+          for NAME in ic_launcher ic_launcher_round; do
+            cat > "$RES/mipmap-anydpi-v26/${NAME}.xml" <<'XMLEOF'
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background"/>
+    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+</adaptive-icon>
+XMLEOF
+          done
+
+          # ── Background color resource ──
+          mkdir -p "$RES/values"
+          if [ -f "$RES/values/colors.xml" ]; then
+            if ! grep -q "ic_launcher_background" "$RES/values/colors.xml"; then
+              sed -i 's|</resources>|    <color name="ic_launcher_background">#000000</color>\n</resources>|' "$RES/values/colors.xml"
+            fi
+          else
+            cat > "$RES/values/colors.xml" <<'XMLEOF'
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#000000</color>
+</resources>
+XMLEOF
+          fi
+
+          # ── Splash screen (black bg + logo centered) ──
+          for ENTRY in "drawable:480:800" "drawable-hdpi:480:800" "drawable-xhdpi:720:1280" "drawable-xxhdpi:960:1600" "drawable-xxxhdpi:1280:1920"; do
+            DIR="${ENTRY%%:*}"
+            REST="${ENTRY#*:}"
+            W="${REST%:*}"
+            H="${REST#*:}"
+            LOGO_S=$(( H / 5 ))
+            mkdir -p "$RES/$DIR"
+            convert -size ${W}x${H} xc:"#000000" \
+              \( "$LOGO" -resize ${LOGO_S}x${LOGO_S} \) \
+              -gravity Center -composite \
+              "$RES/$DIR/splash.png"
+            echo "  ✓ splash $DIR ${W}x${H}"
+          done
+
+          echo "Icon + splash generation complete"
+
+      # ──────────────────────────────────────────────────
       # 9. Build APK
       # ──────────────────────────────────────────────────
       - name: Make Gradle executable

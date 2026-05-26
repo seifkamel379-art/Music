@@ -37,6 +37,12 @@ import java.util.Set;
             strings = {
                 Manifest.permission.READ_EXTERNAL_STORAGE
             }
+        ),
+        @Permission(
+            alias = "readAudioMedia",
+            strings = {
+                "android.permission.READ_MEDIA_AUDIO"
+            }
         )
     }
 )
@@ -57,7 +63,12 @@ public class MediaScanPlugin extends Plugin {
         if (hasPermission()) {
             doScan(call);
         } else {
-            requestPermissionForAlias("readAudio", call, "permissionCallback");
+            // Android 13+: request READ_MEDIA_AUDIO; older: request READ_EXTERNAL_STORAGE
+            if (Build.VERSION.SDK_INT >= 33) {
+                requestPermissionForAlias("readAudioMedia", call, "permissionCallback");
+            } else {
+                requestPermissionForAlias("readAudio", call, "permissionCallback");
+            }
         }
     }
 
@@ -72,13 +83,9 @@ public class MediaScanPlugin extends Plugin {
 
     private boolean hasPermission() {
         if (Build.VERSION.SDK_INT >= 33) {
-            // Android 13+: READ_MEDIA_AUDIO (dynamically check even if not in annotation)
-            try {
-                int r = ContextCompat.checkSelfPermission(getContext(), "android.permission.READ_MEDIA_AUDIO");
-                if (r == PackageManager.PERMISSION_GRANTED) return true;
-            } catch (Exception ignored) {}
+            int r = ContextCompat.checkSelfPermission(getContext(), "android.permission.READ_MEDIA_AUDIO");
+            return r == PackageManager.PERMISSION_GRANTED;
         }
-        // API < 33: READ_EXTERNAL_STORAGE
         return ContextCompat.checkSelfPermission(getContext(),
                 Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED;
     }

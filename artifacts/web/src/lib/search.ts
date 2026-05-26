@@ -13,6 +13,10 @@ const PIPED_INSTANCES = [
   "https://piped-api.garudalinux.org",
   "https://api.piped.projectsegfau.lt",
   "https://piped.lunar.icu/api",
+  "https://pipedapi.adminforge.de",
+  "https://pipedapi.coldforge.xyz",
+  "https://pipedapi.mha.fi",
+  "https://piped-api.codeberg.page",
 ];
 
 function fmtDuration(secs: number): string {

@@ -2,7 +2,7 @@ import { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
   appId: "io.seifoo.app",
-  appName: "seifoo",
+  appName: "Seif music",
   webDir: "dist/public",
   server: {
     androidScheme: "https",
