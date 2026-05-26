@@ -159,7 +159,8 @@ jobs:
           PACKAGE=$(grep "^package " "$MAIN_FILE" | head -1 | sed 's/package //;s/;//')
           if [ -n "$PACKAGE" ]; then
             sed -i "s/^package io.seifoo.app;/package $PACKAGE;/" "$PKG_DIR/MediaScanPlugin.java"
-            sed -i "s/^class ContentUris/class ContentUrisHelper/" "$PKG_DIR/MediaScanPlugin.java" || true
+            # NOTE: Do NOT rename the local ContentUris helper class — it shadows android.content.ContentUris
+            # intentionally within the file, and renaming breaks the reference on line 189.
             echo "Set package: $PACKAGE" >> /tmp/plugin-install.log
           fi
 
@@ -171,8 +172,10 @@ jobs:
           if grep -q "registerPlugin\|MediaScanPlugin" "$MAIN"; then
             echo "Plugin already registered" >> /tmp/plugin-install.log
           else
-            # Add import
-            sed -i "/^package /a import com.getcapacitor.BridgeActivity;" "$MAIN" 2>/dev/null || true
+            # Add import only if not already present
+            if ! grep -q "import com.getcapacitor.BridgeActivity;" "$MAIN"; then
+              sed -i "/^package /a import com.getcapacitor.BridgeActivity;" "$MAIN" 2>/dev/null || true
+            fi
             # Add registerPlugin before super.onCreate or as a new override
             if grep -q "onCreate" "$MAIN"; then
               # Insert registerPlugin call at the beginning of onCreate
@@ -225,12 +228,14 @@ jobs:
       - name: Build Debug APK (with full logs)
         working-directory: artifacts/web/android
         run: |
+          set -o pipefail
           ./gradlew assembleDebug \
             --no-daemon \
-            --info \
             --stacktrace \
             2>&1 | tee /tmp/gradle-full-build.log
-          echo "=== Gradle exit: $?" >> /tmp/gradle-full-build.log
+          GRADLE_EXIT=${PIPESTATUS[0]}
+          echo "=== Gradle exit: $GRADLE_EXIT" >> /tmp/gradle-full-build.log
+          exit $GRADLE_EXIT
 
       # ──────────────────────────────────────────────────
       # 10. Collect ALL logs (mandatory — always runs)
@@ -282,9 +287,14 @@ jobs:
             fi
           } | tee /tmp/seifoo-build-logs/SUMMARY.txt
 
-          # Java compilation errors (most useful for debugging)
-          grep -n "error:" /tmp/gradle-full-build.log 2>/dev/null | \
-            head -50 > /tmp/seifoo-build-logs/COMPILE_ERRORS.txt || true
+          # Errors — catch Java errors, AAPT2 errors, D8/R8 failures, and Gradle failures
+          {
+            grep -n "error:" /tmp/gradle-full-build.log 2>/dev/null | head -50
+            grep -n "ERROR:" /tmp/gradle-full-build.log 2>/dev/null | head -50
+            grep -n "FAILURE:" /tmp/gradle-full-build.log 2>/dev/null | head -20
+            grep -n "Execution failed for task" /tmp/gradle-full-build.log 2>/dev/null | head -20
+            grep -n "What went wrong" /tmp/gradle-full-build.log 2>/dev/null | head -10
+          } | sort -t: -k1,1n | uniq > /tmp/seifoo-build-logs/COMPILE_ERRORS.txt || true
 
           # Warnings
           grep -n "warning:" /tmp/gradle-full-build.log 2>/dev/null | \
