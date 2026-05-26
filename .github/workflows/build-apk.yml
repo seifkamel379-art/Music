@@ -215,56 +215,66 @@ jobs:
       - name: Generate branded icons and splash screen
         working-directory: artifacts/web
         run: |
-          set -e
           LOGO="public/logo.png"
           RES="android/app/src/main/res"
+          echo "ImageMagick: $(convert --version | head -1)"
+          echo "Logo: $(file $LOGO)"
 
-          echo "Logo info: $(file $LOGO)"
+          # Helper: black bg icon — resize logo then extend canvas to SIZE with black fill
+          make_icon() {
+            local SRC="$1" INNER="$2" SIZE="$3" OUT="$4"
+            convert "$SRC" -resize "${INNER}x${INNER}" \
+              -gravity Center -background "#000000" \
+              -extent "${SIZE}x${SIZE}" \
+              "$OUT" && echo "  ✓ $OUT" || echo "  WARN: failed $OUT"
+          }
 
-          # ── Standard legacy icons (black background + logo centered) ──
+          # Helper: transparent foreground — resize and extend with transparent fill
+          make_fg() {
+            local SRC="$1" INNER="$2" SIZE="$3" OUT="$4"
+            convert "$SRC" -resize "${INNER}x${INNER}" \
+              -gravity Center -background none \
+              -extent "${SIZE}x${SIZE}" \
+              "$OUT" && echo "  ✓ $OUT" || echo "  WARN: failed $OUT"
+          }
+
+          # ── Legacy icons (black bg) ──
           for ENTRY in "mipmap-mdpi:48" "mipmap-hdpi:72" "mipmap-xhdpi:96" "mipmap-xxhdpi:144" "mipmap-xxxhdpi:192"; do
             DIR="${ENTRY%:*}"
             SIZE="${ENTRY#*:}"
-            PAD=$(( SIZE / 8 ))
-            INNER=$(( SIZE - PAD * 2 ))
-            convert -size ${SIZE}x${SIZE} xc:"#000000" \
-              \( "$LOGO" -resize ${INNER}x${INNER} \) \
-              -gravity Center -composite \
-              "$RES/$DIR/ic_launcher.png"
+            INNER=$(( SIZE * 3 / 4 ))
+            mkdir -p "$RES/$DIR"
+            make_icon "$LOGO" "$INNER" "$SIZE" "$RES/$DIR/ic_launcher.png"
             cp "$RES/$DIR/ic_launcher.png" "$RES/$DIR/ic_launcher_round.png"
-            echo "  ✓ $DIR ${SIZE}x${SIZE}"
           done
 
-          # ── Adaptive icon foreground (transparent bg, logo in safe zone) ──
+          # ── Adaptive foreground (transparent) ──
           for ENTRY in "mipmap-mdpi:108" "mipmap-hdpi:162" "mipmap-xhdpi:216" "mipmap-xxhdpi:324" "mipmap-xxxhdpi:432"; do
             DIR="${ENTRY%:*}"
             SIZE="${ENTRY#*:}"
             INNER=$(( SIZE * 55 / 100 ))
-            convert -size ${SIZE}x${SIZE} xc:none \
-              \( "$LOGO" -resize ${INNER}x${INNER} \) \
-              -gravity Center -composite \
-              "$RES/$DIR/ic_launcher_foreground.png"
-            echo "  ✓ $DIR foreground ${SIZE}x${SIZE}"
+            mkdir -p "$RES/$DIR"
+            make_fg "$LOGO" "$INNER" "$SIZE" "$RES/$DIR/ic_launcher_foreground.png"
           done
 
-          # ── Adaptive icon XML (black background + our foreground) ──
+          # ── Adaptive icon XML ──
           mkdir -p "$RES/mipmap-anydpi-v26"
-          ADAPTIVE_XML='<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n    <background android:drawable="@color/ic_launcher_background"/>\n    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n</adaptive-icon>'
           for NAME in ic_launcher ic_launcher_round; do
-            printf '%b\n' "$ADAPTIVE_XML" > "$RES/mipmap-anydpi-v26/${NAME}.xml"
+            printf '<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n    <background android:drawable="@color/ic_launcher_background"/>\n    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n</adaptive-icon>\n' \
+              > "$RES/mipmap-anydpi-v26/${NAME}.xml"
           done
 
-          # ── Background color resource ──
+          # ── Background color ──
           mkdir -p "$RES/values"
           if [ -f "$RES/values/colors.xml" ]; then
-            if ! grep -q "ic_launcher_background" "$RES/values/colors.xml"; then
+            grep -q "ic_launcher_background" "$RES/values/colors.xml" || \
               sed -i 's|</resources>|    <color name="ic_launcher_background">#000000</color>\n</resources>|' "$RES/values/colors.xml"
-            fi
           else
-            printf '%b\n' '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="ic_launcher_background">#000000</color>\n</resources>' > "$RES/values/colors.xml"
+            printf '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="ic_launcher_background">#000000</color>\n</resources>\n' \
+              > "$RES/values/colors.xml"
           fi
 
-          # ── Splash screen (black bg + logo centered) ──
+          # ── Splash screens ──
           for ENTRY in "drawable:480:800" "drawable-hdpi:480:800" "drawable-xhdpi:720:1280" "drawable-xxhdpi:960:1600" "drawable-xxxhdpi:1280:1920"; do
             DIR="${ENTRY%%:*}"
             REST="${ENTRY#*:}"
@@ -272,11 +282,10 @@ jobs:
             H="${REST#*:}"
             LOGO_S=$(( H / 5 ))
             mkdir -p "$RES/$DIR"
-            convert -size ${W}x${H} xc:"#000000" \
-              \( "$LOGO" -resize ${LOGO_S}x${LOGO_S} \) \
-              -gravity Center -composite \
-              "$RES/$DIR/splash.png"
-            echo "  ✓ splash $DIR ${W}x${H}"
+            convert "$LOGO" -resize "${LOGO_S}x${LOGO_S}" \
+              -gravity Center -background "#000000" \
+              -extent "${W}x${H}" \
+              "$RES/$DIR/splash.png" && echo "  ✓ splash $DIR" || echo "  WARN: splash $DIR failed"
           done
 
           echo "Icon + splash generation complete"
