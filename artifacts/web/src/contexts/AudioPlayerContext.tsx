@@ -1,9 +1,10 @@
-/* Audio Player — 100% native <audio>, no YouTube iframe.
- * Online tracks  : Cloudflare Worker → direct URL → <audio>
- * Local tracks   : blob URL → <audio>
- * Web/browser    : HTML5 Media Session API (lock screen on Chrome)
- * Android APK    : Native Foreground Service + MediaSession via audiosession.ts
- *                  → real lock-screen notification with controls, even screen off
+/* Audio Player — HTML5 <audio> primary, YouTube IFrame API fallback.
+ *
+ * Stream resolution order:
+ *   1. Cloudflare Worker → direct CDN URL → <audio> + hls.js
+ *   2. API server (Innertube + yt-dlp) → direct CDN URL → <audio> + hls.js
+ *   3. YouTube IFrame API (uses user's IP, works for ANY YouTube/YT-Music track)
+ *      → continues playing in background, lock screen via MediaSession API
  */
 import React, {
   createContext, useContext, useEffect, useRef,
@@ -50,6 +51,34 @@ type AudioPlayerCtx = {
 const Ctx = createContext<AudioPlayerCtx | null>(null);
 
 // ──────────────────────────────────────────────────────────
+// YouTube IFrame API loader (singleton)
+// ──────────────────────────────────────────────────────────
+let ytApiLoaded = false;
+let ytApiCallbacks: Array<() => void> = [];
+
+function loadYtApi(): Promise<void> {
+  if (ytApiLoaded && (window as any).YT?.Player) return Promise.resolve();
+  return new Promise(resolve => {
+    ytApiCallbacks.push(resolve);
+    if (!document.getElementById("yt-iframe-api-script")) {
+      const prev = (window as any).onYouTubeIframeAPIReady;
+      (window as any).onYouTubeIframeAPIReady = () => {
+        prev?.();
+        ytApiLoaded = true;
+        ytApiCallbacks.forEach(cb => cb());
+        ytApiCallbacks = [];
+      };
+      const s = document.createElement("script");
+      s.id = "yt-iframe-api-script";
+      s.src = "https://www.youtube.com/iframe_api";
+      document.head.appendChild(s);
+    } else if (ytApiLoaded && (window as any).YT?.Player) {
+      resolve();
+    }
+  });
+}
+
+// ──────────────────────────────────────────────────────────
 // Browser Media Session (lock screen on Chrome browser/PWA)
 // ──────────────────────────────────────────────────────────
 function updateBrowserMediaSession(track: Track | null, playing: boolean) {
@@ -91,16 +120,24 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     playing: false, currentTime: 0, duration: 0, isBuffering: false,
   });
 
+  // HTML5 audio
   const audioRef         = useRef<HTMLAudioElement | null>(null);
   const hlsRef           = useRef<Hls | null>(null);
+  // YouTube IFrame player
+  const ytPlayerRef      = useRef<any>(null);
+  const isYtModeRef      = useRef(false);
+  const ytPollRef        = useRef<number | null>(null);
+  // Shared
   const currentIdxRef    = useRef(0);
   const queueRef         = useRef<Track[]>([]);
   const currentTrackRef  = useRef<Track | null>(null);
   const resolveAbortRef  = useRef<AbortController | null>(null);
-  const positionTimerRef = useRef<number | null>(null);
 
   useEffect(() => { queueRef.current       = queue;        }, [queue]);
   useEffect(() => { currentTrackRef.current = currentTrack; }, [currentTrack]);
+
+  // Pre-load YouTube IFrame API on mount
+  useEffect(() => { loadYtApi(); }, []);
 
   // ── Native position-state sync (throttled to every 5 s) ──
   const lastNativeSyncRef = useRef(0);
@@ -109,6 +146,124 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     if (now - lastNativeSyncRef.current < 5000) return;
     lastNativeSyncRef.current = now;
     updatePlaybackState({ playing, positionMs: Math.floor(ct * 1000), durationMs: Math.floor(dur * 1000) });
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // YouTube IFrame player helpers
+  // ──────────────────────────────────────────────────────────
+  function stopYtPoll() {
+    if (ytPollRef.current !== null) {
+      clearInterval(ytPollRef.current);
+      ytPollRef.current = null;
+    }
+  }
+
+  function startYtPoll() {
+    stopYtPoll();
+    ytPollRef.current = window.setInterval(() => {
+      const yp = ytPlayerRef.current;
+      if (!yp?.getCurrentTime || !isYtModeRef.current) return;
+      try {
+        const ct  = yp.getCurrentTime() || 0;
+        const dur = yp.getDuration()    || 0;
+        setStatus(s => ({ ...s, currentTime: ct, duration: dur }));
+        updateBrowserPositionState(ct, dur);
+        maybeNativeSyncPosition(ct, dur, true);
+      } catch {}
+    }, 500);
+  }
+
+  // Called by YT.Player onStateChange
+  const handleYtStateChange = useCallback((event: any) => {
+    if (!isYtModeRef.current) return;
+    const YT_PLAYING   = 1;
+    const YT_PAUSED    = 2;
+    const YT_BUFFERING = 3;
+    const YT_ENDED     = 0;
+
+    switch (event.data) {
+      case YT_PLAYING:
+        setStatus(s => ({ ...s, playing: true, isBuffering: false }));
+        startYtPoll();
+        updateBrowserMediaSession(currentTrackRef.current, true);
+        updatePlaybackState({
+          playing: true,
+          positionMs: 0,
+          durationMs: Math.floor((ytPlayerRef.current?.getDuration?.() || 0) * 1000),
+        });
+        break;
+      case YT_PAUSED:
+        setStatus(s => ({ ...s, playing: false }));
+        stopYtPoll();
+        updateBrowserMediaSession(currentTrackRef.current, false);
+        break;
+      case YT_BUFFERING:
+        setStatus(s => ({ ...s, isBuffering: true }));
+        break;
+      case YT_ENDED:
+        stopYtPoll();
+        setStatus(s => ({ ...s, playing: false, isBuffering: false }));
+        {
+          const next = currentIdxRef.current + 1;
+          const q    = queueRef.current;
+          if (next < q.length) { currentIdxRef.current = next; loadAndPlay(q[next]); }
+          else {
+            updateBrowserMediaSession(currentTrackRef.current, false);
+            updatePlaybackState({ playing: false, positionMs: 0, durationMs: 0 });
+          }
+        }
+        break;
+    }
+  }, []);
+
+  // Init or reload the YT.Player with a new videoId.
+  // Container is created imperatively outside React's DOM so reconciliation
+  // never removes the <iframe> that YouTube injects.
+  async function initYtPlayer(videoId: string): Promise<void> {
+    await loadYtApi();
+    const YT = (window as any).YT;
+    if (!YT?.Player) throw new Error("YouTube IFrame API failed to load");
+
+    if (ytPlayerRef.current) {
+      // Player already exists — just load the new video
+      ytPlayerRef.current.loadVideoById(videoId);
+      return;
+    }
+
+    // Create a persistent container outside React's control
+    const CONTAINER_ID = "yt-iframe-player-root";
+    let container = document.getElementById(CONTAINER_ID);
+    if (!container) {
+      container = document.createElement("div");
+      container.id = CONTAINER_ID;
+      container.setAttribute("aria-hidden", "true");
+      container.style.cssText =
+        "position:fixed;top:-2px;left:-2px;width:1px;height:1px;" +
+        "opacity:0;pointer-events:none;z-index:-9999;overflow:hidden;";
+      document.body.appendChild(container);
+    }
+
+    return new Promise((resolve, reject) => {
+      ytPlayerRef.current = new YT.Player(container, {
+        width:  "1",
+        height: "1",
+        videoId,
+        playerVars: {
+          autoplay:        1,
+          controls:        0,
+          disablekb:       1,
+          iv_load_policy:  3,
+          modestbranding:  1,
+          playsinline:     1,
+          rel:             0,
+        },
+        events: {
+          onReady:       () => resolve(),
+          onStateChange: handleYtStateChange,
+          onError:       (e: any) => reject(new Error(`YT player error ${e.data}`)),
+        },
+      });
+    });
   }
 
   // ── Create / wire <audio> element (once) ──────────────────
@@ -173,28 +328,60 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   useEffect(() => {
     if (!("mediaSession" in navigator)) return;
     const ms = navigator.mediaSession;
-    ms.setActionHandler("play",           () => getAudio().play().catch(() => {}));
-    ms.setActionHandler("pause",          () => getAudio().pause());
-    ms.setActionHandler("nexttrack",      () => {
+
+    const handlePlay = () => {
+      if (isYtModeRef.current) ytPlayerRef.current?.playVideo?.();
+      else getAudio().play().catch(() => {});
+    };
+    const handlePause = () => {
+      if (isYtModeRef.current) ytPlayerRef.current?.pauseVideo?.();
+      else getAudio().pause();
+    };
+    const handleNext = () => {
       const nxt = currentIdxRef.current + 1;
       const q   = queueRef.current;
       if (nxt < q.length) { currentIdxRef.current = nxt; loadAndPlay(q[nxt]); }
-    });
-    ms.setActionHandler("previoustrack",  () => {
-      const a = audioRef.current;
-      if (a && a.currentTime > 3) { a.currentTime = 0; return; }
+    };
+    const handlePrev = () => {
+      if (!isYtModeRef.current) {
+        const a = audioRef.current;
+        if (a && a.currentTime > 3) { a.currentTime = 0; return; }
+      } else {
+        const ct = ytPlayerRef.current?.getCurrentTime?.() || 0;
+        if (ct > 3) { ytPlayerRef.current?.seekTo?.(0, true); return; }
+      }
       const prv = currentIdxRef.current - 1;
       const q   = queueRef.current;
       if (prv >= 0) { currentIdxRef.current = prv; loadAndPlay(q[prv]); }
+    };
+
+    ms.setActionHandler("play",          handlePlay);
+    ms.setActionHandler("pause",         handlePause);
+    ms.setActionHandler("nexttrack",     handleNext);
+    ms.setActionHandler("previoustrack", handlePrev);
+    ms.setActionHandler("seekto",        d => {
+      if (d.seekTime === undefined) return;
+      if (isYtModeRef.current) ytPlayerRef.current?.seekTo?.(d.seekTime, true);
+      else { const a = audioRef.current; if (a) a.currentTime = d.seekTime; }
     });
-    ms.setActionHandler("seekto",         d => {
-      if (d.seekTime !== undefined) { const a = audioRef.current; if (a) a.currentTime = d.seekTime; }
+    ms.setActionHandler("seekbackward", d => {
+      const off = d.seekOffset ?? 10;
+      if (isYtModeRef.current) {
+        const ct = ytPlayerRef.current?.getCurrentTime?.() || 0;
+        ytPlayerRef.current?.seekTo?.(Math.max(0, ct - off), true);
+      } else {
+        const a = audioRef.current; if (a) a.currentTime = Math.max(0, a.currentTime - off);
+      }
     });
-    ms.setActionHandler("seekbackward",   d => {
-      const a = audioRef.current; if (a) a.currentTime = Math.max(0, a.currentTime - (d.seekOffset ?? 10));
-    });
-    ms.setActionHandler("seekforward",    d => {
-      const a = audioRef.current; if (a) a.currentTime = Math.min(a.duration || 0, a.currentTime + (d.seekOffset ?? 10));
+    ms.setActionHandler("seekforward", d => {
+      const off = d.seekOffset ?? 10;
+      if (isYtModeRef.current) {
+        const ct  = ytPlayerRef.current?.getCurrentTime?.() || 0;
+        const dur = ytPlayerRef.current?.getDuration?.() || 0;
+        ytPlayerRef.current?.seekTo?.(Math.min(dur, ct + off), true);
+      } else {
+        const a = audioRef.current; if (a) a.currentTime = Math.min(a.duration || 0, a.currentTime + off);
+      }
     });
   }, [getAudio]);
 
@@ -204,10 +391,12 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       const audio = audioRef.current;
       switch (evt.command) {
         case "play":
-          audio?.play().catch(() => {});
+          if (isYtModeRef.current) ytPlayerRef.current?.playVideo?.();
+          else audio?.play().catch(() => {});
           break;
         case "pause":
-          audio?.pause();
+          if (isYtModeRef.current) ytPlayerRef.current?.pauseVideo?.();
+          else audio?.pause();
           break;
         case "next": {
           const nxt = currentIdxRef.current + 1;
@@ -216,19 +405,27 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
           break;
         }
         case "prev": {
-          if (audio && audio.currentTime > 3) { audio.currentTime = 0; break; }
+          if (isYtModeRef.current) {
+            const ct = ytPlayerRef.current?.getCurrentTime?.() || 0;
+            if (ct > 3) { ytPlayerRef.current?.seekTo?.(0, true); break; }
+          } else if (audio && audio.currentTime > 3) {
+            audio.currentTime = 0; break;
+          }
           const prv = currentIdxRef.current - 1;
           const q   = queueRef.current;
           if (prv >= 0) { currentIdxRef.current = prv; loadAndPlay(q[prv]); }
           break;
         }
         case "seek":
-          if (audio && evt.position !== undefined) {
-            audio.currentTime = evt.position / 1000;
+          if (evt.position !== undefined) {
+            if (isYtModeRef.current) ytPlayerRef.current?.seekTo?.(evt.position / 1000, true);
+            else if (audio) audio.currentTime = evt.position / 1000;
           }
           break;
         case "stop":
-          if (audio) { audio.pause(); audio.currentTime = 0; }
+          stopYtPoll();
+          if (isYtModeRef.current) ytPlayerRef.current?.stopVideo?.();
+          else if (audio) { audio.pause(); audio.currentTime = 0; }
           stopAudioSession();
           break;
       }
@@ -246,8 +443,6 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     setStatus({ playing: false, currentTime: 0, duration: 0, isBuffering: true });
     updateBrowserMediaSession(track, false);
 
-    // Start / update the native Android foreground service immediately
-    // (so the notification appears even before audio starts)
     startAudioSession({
       title:      track.title,
       artist:     track.artist,
@@ -256,7 +451,6 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       durationMs: 0,
       positionMs: 0,
     });
-    // Also update metadata for native (in case session was already started)
     updateAudioMetadata({
       title:     track.title,
       artist:    track.artist,
@@ -264,31 +458,69 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       durationMs: 0,
     });
 
-    const audio = getAudio();
-    audio.pause();
-
-    // Destroy any previous HLS instance
-    if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
-    audio.removeAttribute("src");
-    audio.load();
-
     try {
-      let src: string;
       if (track.localUrl) {
-        src = track.localUrl;
-      } else {
-        const { url } = await resolveStreamUrl(track.videoId);
+        // ── Local file → always use HTML5 audio ──────────────
+        isYtModeRef.current = false;
+        stopYtPoll();
+        const audio = getAudio();
+        audio.pause();
+        if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+        audio.removeAttribute("src");
+        audio.load();
         if (ctrl.signal.aborted) return;
-        src = url;
+        audio.src = track.localUrl;
+        audio.load();
+        await audio.play();
+        updatePlaybackState({ playing: true, positionMs: 0, durationMs: Math.floor((audio.duration || 0) * 1000) });
+        return;
       }
 
-      const isHls = src.includes(".m3u8") || src.includes("/manifest/");
+      const { url } = await resolveStreamUrl(track.videoId);
+      if (ctrl.signal.aborted) return;
+
+      // ── YouTube IFrame fallback ───────────────────────────
+      if (url.startsWith("yt:")) {
+        const ytVideoId = url.slice(3);
+        isYtModeRef.current = true;
+        stopYtPoll();
+
+        // Pause / detach HTML5 audio so it doesn't double-play
+        if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+        const audio = getAudio();
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
+
+        setStatus(s => ({ ...s, isBuffering: true }));
+        await initYtPlayer(ytVideoId);
+        if (ctrl.signal.aborted) {
+          ytPlayerRef.current?.pauseVideo?.();
+          return;
+        }
+        // YT.Player will fire onStateChange → PLAYING which sets status
+        return;
+      }
+
+      // ── Direct URL → HTML5 audio ──────────────────────────
+      isYtModeRef.current = false;
+      stopYtPoll();
+      if (ytPlayerRef.current) {
+        try { ytPlayerRef.current.pauseVideo?.(); } catch {}
+      }
+
+      const audio = getAudio();
+      audio.pause();
+      if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+      audio.removeAttribute("src");
+      audio.load();
+
+      const isHls = url.includes(".m3u8") || url.includes("/manifest/");
       if (isHls && Hls.isSupported()) {
-        // Chrome / Firefox — use hls.js
         const hls = new Hls({ enableWorker: true, lowLatencyMode: false });
         hlsRef.current = hls;
         hls.attachMedia(audio);
-        hls.loadSource(src);
+        hls.loadSource(url);
         await new Promise<void>((resolve, reject) => {
           hls.once(Hls.Events.MANIFEST_PARSED, () => resolve());
           hls.once(Hls.Events.ERROR, (_: unknown, data: any) => {
@@ -297,12 +529,10 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
         });
         if (ctrl.signal.aborted) { hls.destroy(); hlsRef.current = null; return; }
       } else {
-        // Safari (native HLS) or direct audio URL
-        audio.src = src;
+        audio.src = url;
         audio.load();
       }
       await audio.play();
-      // Native state: now actually playing
       updatePlaybackState({
         playing:    true,
         positionMs: 0,
@@ -331,9 +561,16 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   }
 
   function pauseOrResume() {
-    const a = audioRef.current; if (!a) return;
-    if (status.playing) a.pause();
-    else a.play().catch(() => {});
+    if (isYtModeRef.current) {
+      const yp = ytPlayerRef.current;
+      if (!yp) return;
+      if (status.playing) yp.pauseVideo?.();
+      else yp.playVideo?.();
+    } else {
+      const a = audioRef.current; if (!a) return;
+      if (status.playing) a.pause();
+      else a.play().catch(() => {});
+    }
   }
 
   function playNext() {
@@ -343,27 +580,49 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   }
 
   function playPrev() {
-    const a = audioRef.current;
-    if (a && a.currentTime > 3) { a.currentTime = 0; return; }
+    if (!isYtModeRef.current) {
+      const a = audioRef.current;
+      if (a && a.currentTime > 3) { a.currentTime = 0; return; }
+    } else {
+      const ct = ytPlayerRef.current?.getCurrentTime?.() || 0;
+      if (ct > 3) { ytPlayerRef.current?.seekTo?.(0, true); return; }
+    }
     const prv = currentIdxRef.current - 1;
     const q   = queueRef.current;
     if (prv >= 0) { currentIdxRef.current = prv; loadAndPlay(q[prv]); }
   }
 
   function seekTo(seconds: number) {
-    const a = audioRef.current;
-    if (!a || !isFinite(seconds)) return;
-    a.currentTime = Math.max(0, seconds);
-    updateBrowserPositionState(seconds, a.duration || 0);
-    updatePlaybackState({
-      playing:    !a.paused,
-      positionMs: Math.floor(seconds * 1000),
-      durationMs: Math.floor((a.duration || 0) * 1000),
-    });
+    if (!isFinite(seconds)) return;
+    if (isYtModeRef.current) {
+      ytPlayerRef.current?.seekTo?.(Math.max(0, seconds), true);
+      setStatus(s => ({ ...s, currentTime: seconds }));
+      updateBrowserPositionState(seconds, ytPlayerRef.current?.getDuration?.() || 0);
+      updatePlaybackState({
+        playing:    status.playing,
+        positionMs: Math.floor(seconds * 1000),
+        durationMs: Math.floor((ytPlayerRef.current?.getDuration?.() || 0) * 1000),
+      });
+    } else {
+      const a = audioRef.current;
+      if (!a) return;
+      a.currentTime = Math.max(0, seconds);
+      updateBrowserPositionState(seconds, a.duration || 0);
+      updatePlaybackState({
+        playing:    !a.paused,
+        positionMs: Math.floor(seconds * 1000),
+        durationMs: Math.floor((a.duration || 0) * 1000),
+      });
+    }
   }
 
   function clearPlayer() {
     resolveAbortRef.current?.abort();
+    stopYtPoll();
+    isYtModeRef.current = false;
+    if (ytPlayerRef.current) {
+      try { ytPlayerRef.current.stopVideo?.(); } catch {}
+    }
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
     const a = audioRef.current;
     if (a) { a.pause(); a.removeAttribute("src"); a.load(); }

@@ -84,47 +84,96 @@ router.get("/music/url/:videoId", async (req: Request, res: Response, next: Next
   const videoId = typeof req.params.videoId === "string" ? req.params.videoId.trim() : "";
   if (!videoId) { res.status(400).json({ message: "Missing videoId" }); return; }
 
-  // ── Try Innertube first ────────────────────────────────────────────────
-  try {
-    const yt = await getClient();
-    const info = await (yt as any).getBasicInfo(videoId, "WEB");
-    const formats: any[] = info?.streaming_data?.adaptive_formats ?? [];
-    const audioFormats = formats
-      .filter((f: any) => f.has_audio && !f.has_video && f.url)
+  const yt = await getClient();
+
+  // Helper: pick best audio format.
+  // fmt.url is a getter in youtubei.js v17 that may call decipher() and throw —
+  // wrap each access in try/catch to skip undecipherable formats gracefully.
+  function pickAudioUrl(formats: any[]): { url: string; contentType: string } | null {
+    const audio = formats
+      .filter((f: any) => f.has_audio && !f.has_video)
       .sort((a: any, b: any) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
-    const best = audioFormats[0];
-    if (best?.url) {
-      logger.info({ videoId, mime: best.mime_type }, "Innertube URL resolved");
-      res.json({ url: best.url, contentType: best.mime_type ?? "audio/webm" });
+    for (const fmt of audio) {
+      try {
+        const raw = fmt.url;
+        const url: string | null =
+          typeof raw === "string" && raw.startsWith("http") ? raw
+          : raw && typeof raw === "object" && typeof raw.href === "string" ? raw.href
+          : null;
+        if (url) return { url, contentType: fmt.mime_type ?? "audio/webm" };
+      } catch { /* skip formats that require deciphering */ }
+    }
+    return null;
+  }
+
+  // ── 1. Try yt.music.getInfo (best for YT-Music-exclusive tracks) ────────
+  try {
+    const info = await (yt as any).music.getInfo(videoId);
+    const result = pickAudioUrl(info?.streaming_data?.adaptive_formats ?? []);
+    if (result) {
+      logger.info({ videoId, mime: result.contentType }, "music.getInfo URL resolved");
+      res.json(result);
       return;
     }
   } catch (e) {
-    logger.warn({ err: e, videoId }, "Innertube URL failed, trying yt-dlp");
+    logger.warn({ err: (e as Error).message, videoId }, "music.getInfo failed");
   }
 
-  // ── Fallback: yt-dlp --get-url ─────────────────────────────────────────
+  // ── 2. Try getBasicInfo (WEB client) with vm-backed decipher ────────────
   try {
-    const url = await new Promise<string>((resolve, reject) => {
-      const proc = spawn(
-        "yt-dlp",
-        ["--get-url", "-f", "bestaudio", "--no-warnings", `https://youtu.be/${videoId}`],
-        { timeout: 30_000 },
-      );
+    const info = await (yt as any).getBasicInfo(videoId, "WEB");
+    const result = pickAudioUrl(info?.streaming_data?.adaptive_formats ?? []);
+    if (result) {
+      logger.info({ videoId, mime: result.contentType }, "getBasicInfo URL resolved");
+      res.json(result);
+      return;
+    }
+  } catch (e) {
+    logger.warn({ err: (e as Error).message, videoId }, "getBasicInfo failed");
+  }
+
+  // ── 3. Fallback: yt-dlp with progressive format selectors ───────────────
+  function ytdlpGetUrl(fmtSelector: string, extraArgs: string[] = []): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const args = [
+        "--get-url",
+        "-f", fmtSelector,
+        "--no-warnings",
+        ...extraArgs,
+        `https://youtu.be/${videoId}`,
+      ];
+      const proc = spawn("yt-dlp", args, { timeout: 25_000 });
       let out = "";
       proc.stdout.on("data", (d: Buffer) => { out += d.toString(); });
       proc.on("close", (code: number | null) => {
         const u = out.trim().split("\n")[0] ?? "";
         if (code === 0 && u) resolve(u);
-        else reject(new Error(`yt-dlp exit ${code}`));
+        else reject(new Error(`yt-dlp(${fmtSelector}) exit ${code}`));
       });
       proc.on("error", reject);
     });
-    logger.info({ videoId }, "yt-dlp URL resolved");
-    res.json({ url, contentType: "audio/webm" });
-  } catch (e) {
-    logger.error({ err: e, videoId }, "URL resolution failed");
-    next(e);
   }
+
+  // Format priority: 140=m4a/128k, 251=webm/opus/160k, 250/249=opus lower quality
+  const ytdlpAttempts: Array<[string, string[]]> = [
+    ["140/251/250/249/bestaudio/best", ["--extractor-args", "youtube:player_client=web_music"]],
+    ["140/251/250/249/bestaudio/best", ["--extractor-args", "youtube:player_client=mweb"]],
+    ["bestaudio/best",                 ["--extractor-args", "youtube:player_client=ios"]],
+    ["bestaudio/best",                 []],
+    ["best",                           ["--extractor-args", "youtube:player_client=web_music"]],
+  ];
+
+  for (const [fmt, extra] of ytdlpAttempts) {
+    try {
+      const url = await ytdlpGetUrl(fmt, extra);
+      logger.info({ videoId, fmt, extra }, "yt-dlp URL resolved");
+      res.json({ url, contentType: "audio/webm" });
+      return;
+    } catch { /* try next */ }
+  }
+
+  logger.error({ videoId }, "All URL resolution attempts failed");
+  res.status(503).json({ message: "Stream unavailable — try again shortly" });
 });
 
 /* ── Search ─────────────────────────────────────────────────────────────── */

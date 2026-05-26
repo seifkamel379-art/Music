@@ -1,5 +1,20 @@
-import { Innertube } from "youtubei.js";
+import { Innertube, Platform } from "youtubei.js";
+import vm from "vm";
 import { logger } from "./logger";
+
+// youtubei.js v17 node platform loads with a default "evaluate" that throws.
+// Platform.shim is the singleton — mutate ONLY the eval property so other shim
+// properties (fetch, crypto, Cache, etc.) remain intact.
+// Player.js calls: await Platform.shim.eval(data, eval_args)
+// IMPORTANT: vm.runInNewContext needs globalThis spread so Object/Array/etc. are available.
+try {
+  (Platform as any).shim.eval = async (code: string, env: Record<string, unknown>) => {
+    const sandbox = vm.createContext({ ...globalThis, ...(env ?? {}) });
+    return vm.runInContext(code, sandbox);
+  };
+} catch {
+  // shim not yet loaded or vm not available
+}
 
 let client: Innertube | null = null;
 let clientCreatedAt = 0;

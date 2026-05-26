@@ -1,6 +1,7 @@
 /* Resolves YouTube video ID → direct audio URL.
  * Primary:  Cloudflare Worker (VITE_WORKER_URL)
  * Fallback: Local API server /api/music/url/:videoId (Innertube + yt-dlp)
+ * Last resort: Return "yt:<videoId>" — player uses YouTube IFrame API via user's IP
  */
 
 const WORKER_URL = (import.meta.env.VITE_WORKER_URL as string | undefined) ?? "https://seif-music-resolver.seifmusic.workers.dev";
@@ -21,7 +22,7 @@ export async function resolveStreamUrl(videoId: string): Promise<StreamResult> {
   try {
     const params = new URLSearchParams({ id: videoId, key: WORKER_KEY });
     const res = await fetch(`${WORKER_URL}/url?${params}`, {
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(12_000),
     });
     if (res.ok) {
       const data = await res.json() as { url?: string; contentType?: string; error?: string };
@@ -36,18 +37,27 @@ export async function resolveStreamUrl(videoId: string): Promise<StreamResult> {
   }
 
   // ── Fallback: API server (Innertube + yt-dlp) ────────────────────────────
-  const apiRes = await fetch(`/api/music/url/${encodeURIComponent(videoId)}`, {
-    signal: AbortSignal.timeout(35_000),
-  });
-  if (!apiRes.ok) {
-    const body = await apiRes.text().catch(() => "");
-    throw new Error(`Stream unavailable (${apiRes.status}): ${body}`);
+  try {
+    const apiRes = await fetch(`/api/music/url/${encodeURIComponent(videoId)}`, {
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (apiRes.ok) {
+      const data = await apiRes.json() as { url?: string; contentType?: string; message?: string };
+      if (data.url) {
+        const result: StreamResult = { url: data.url, contentType: data.contentType ?? "audio/webm" };
+        urlCache.set(videoId, { result, expiresAt: Date.now() + 25 * 60 * 1000 });
+        return result;
+      }
+    }
+  } catch {
+    // fall through to YouTube IFrame fallback
   }
-  const data = await apiRes.json() as { url?: string; contentType?: string; message?: string };
-  if (!data.url) throw new Error(data.message ?? "No stream URL available");
 
-  const result: StreamResult = { url: data.url, contentType: data.contentType ?? "audio/webm" };
-  urlCache.set(videoId, { result, expiresAt: Date.now() + 25 * 60 * 1000 });
+  // ── Last resort: YouTube IFrame API (uses user's browser IP, not server) ──
+  // Return "yt:<videoId>" — AudioPlayerContext detects this and uses YT.Player
+  const result: StreamResult = { url: `yt:${videoId}`, contentType: "youtube" };
+  // Don't cache long — retry direct URL on next play attempt
+  urlCache.set(videoId, { result, expiresAt: Date.now() + 5 * 60 * 1000 });
   return result;
 }
 

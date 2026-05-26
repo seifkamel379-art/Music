@@ -1,0 +1,3 @@
+- [YouTube SABR streaming](yt-sabr-streaming.md) — حمو المرشدي and YT-Music exclusive tracks have fmt.url=undefined (SABR protocol); fixed via YouTube IFrame API fallback using user's browser IP.
+- [youtubei.js v17 vm evaluator](ytjs-vm-eval.md) — Platform.shim.eval must be mutated (not Platform.load) with vm.createContext({...globalThis, ...env}) for decipher to work.
+- [yt-dlp server IP restriction](ytdlp-server-ip.md) — yt-dlp on server IP fails for SABR-only YT-Music exclusive tracks; browser IP via IFrame API is the only reliable solution.
