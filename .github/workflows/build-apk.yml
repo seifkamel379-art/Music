@@ -119,12 +119,13 @@ jobs:
           cat "$GRADLE" >> /tmp/gradle-patch.log
 
           # Force minSdk to 21 (Android 5.0) — widest possible support
-          sed -i "s/minSdkVersion [0-9]*/minSdkVersion ${{ env.MIN_SDK }}/g" "$GRADLE"
-          sed -i "s/minSdk [0-9]*/minSdk ${{ env.MIN_SDK }}/g" "$GRADLE"
-          sed -i "s/targetSdkVersion [0-9]*/targetSdkVersion ${{ env.TARGET_SDK }}/g" "$GRADLE"
-          sed -i "s/targetSdk [0-9]*/targetSdk ${{ env.TARGET_SDK }}/g" "$GRADLE"
-          sed -i "s/compileSdkVersion [0-9]*/compileSdkVersion ${{ env.COMPILE_SDK }}/g" "$GRADLE"
-          sed -i "s/compileSdk [0-9]*/compileSdk ${{ env.COMPILE_SDK }}/g" "$GRADLE"
+          # Use .* to match full value (handles both numeric literals and rootProject.ext.* variable references)
+          sed -i "s/minSdkVersion .*/minSdkVersion ${{ env.MIN_SDK }}/g" "$GRADLE"
+          sed -i "s/minSdk .*/minSdk ${{ env.MIN_SDK }}/g" "$GRADLE"
+          sed -i "s/targetSdkVersion .*/targetSdkVersion ${{ env.TARGET_SDK }}/g" "$GRADLE"
+          sed -i "s/targetSdk .*/targetSdk ${{ env.TARGET_SDK }}/g" "$GRADLE"
+          sed -i "s/compileSdkVersion .*/compileSdkVersion ${{ env.COMPILE_SDK }}/g" "$GRADLE"
+          sed -i "s/compileSdk .*/compileSdk ${{ env.COMPILE_SDK }}/g" "$GRADLE"
 
           # Disable minify/shrink for debug build (keeps all code, simpler logs)
           sed -i "s/minifyEnabled true/minifyEnabled false/g" "$GRADLE"
