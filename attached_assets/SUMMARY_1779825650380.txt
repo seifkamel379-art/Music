@@ -1,0 +1,15 @@
+==============================
+ seifoo APK Build Summary
+==============================
+Date       : Tue May 26 19:52:45 UTC 2026
+Commit     : e13de9a133ae86d305808b5c2e5ca6c0f2e5ca49
+Branch     : main
+Runner OS  : Linux
+Java       : openjdk version "17.0.19" 2026-04-21
+Node       : v20.20.2
+pnpm       : 
+
+STATUS     : ❌ BUILD FAILED (no APK found)
+
+--- Last 100 lines of Gradle log ---
+(no gradle log)
