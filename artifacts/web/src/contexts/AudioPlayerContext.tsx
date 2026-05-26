@@ -9,6 +9,7 @@ import React, {
   createContext, useContext, useEffect, useRef,
   useState, useMemo, useCallback,
 } from "react";
+import Hls from "hls.js";
 import { resolveStreamUrl } from "../lib/streamer";
 import {
   startAudioSession,
@@ -91,6 +92,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   });
 
   const audioRef         = useRef<HTMLAudioElement | null>(null);
+  const hlsRef           = useRef<Hls | null>(null);
   const currentIdxRef    = useRef(0);
   const queueRef         = useRef<Track[]>([]);
   const currentTrackRef  = useRef<Track | null>(null);
@@ -264,6 +266,9 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
 
     const audio = getAudio();
     audio.pause();
+
+    // Destroy any previous HLS instance
+    if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
     audio.removeAttribute("src");
     audio.load();
 
@@ -276,8 +281,26 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
         if (ctrl.signal.aborted) return;
         src = url;
       }
-      audio.src = src;
-      audio.load();
+
+      const isHls = src.includes(".m3u8") || src.includes("/manifest/");
+      if (isHls && Hls.isSupported()) {
+        // Chrome / Firefox — use hls.js
+        const hls = new Hls({ enableWorker: true, lowLatencyMode: false });
+        hlsRef.current = hls;
+        hls.attachMedia(audio);
+        hls.loadSource(src);
+        await new Promise<void>((resolve, reject) => {
+          hls.once(Hls.Events.MANIFEST_PARSED, () => resolve());
+          hls.once(Hls.Events.ERROR, (_: unknown, data: any) => {
+            if (data.fatal) reject(new Error(`HLS error: ${data.details}`));
+          });
+        });
+        if (ctrl.signal.aborted) { hls.destroy(); hlsRef.current = null; return; }
+      } else {
+        // Safari (native HLS) or direct audio URL
+        audio.src = src;
+        audio.load();
+      }
       await audio.play();
       // Native state: now actually playing
       updatePlaybackState({
@@ -341,6 +364,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
 
   function clearPlayer() {
     resolveAbortRef.current?.abort();
+    if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
     const a = audioRef.current;
     if (a) { a.pause(); a.removeAttribute("src"); a.load(); }
     setCurrentTrack(null);

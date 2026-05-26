@@ -265,6 +265,9 @@ jobs:
           done
 
           # ── Background color ──
+          # Capacitor generates ic_launcher_background.xml separately — delete it first to avoid
+          # "Duplicate resources" error when we add the same color to colors.xml
+          rm -f "$RES/values/ic_launcher_background.xml"
           mkdir -p "$RES/values"
           if [ -f "$RES/values/colors.xml" ]; then
             grep -q "ic_launcher_background" "$RES/values/colors.xml" || \

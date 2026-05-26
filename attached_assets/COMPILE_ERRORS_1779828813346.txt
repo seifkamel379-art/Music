@@ -1,0 +1,5 @@
+60:ERROR: [color/ic_launcher_background] /home/runner/work/Music/Music/artifacts/web/android/app/src/main/res/values/colors.xml [color/ic_launcher_background] /home/runner/work/Music/Music/artifacts/web/android/app/src/main/res/values/ic_launcher_background.xml: Resource and asset merger: Duplicate resources
+62:FAILURE: Build failed with an exception.
+64:* What went wrong:
+65:Execution failed for task ':app:mergeDebugResources'.
+74:org.gradle.api.tasks.TaskExecutionException: Execution failed for task ':app:mergeDebugResources'.

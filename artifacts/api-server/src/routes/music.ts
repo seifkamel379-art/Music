@@ -1,8 +1,9 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod/v4";
 import type { Request, Response, NextFunction } from "express";
+import { spawn } from "child_process";
 import { logger } from "../lib/logger";
-import { searchTracks } from "../lib/innertube";
+import { searchTracks, getClient } from "../lib/innertube";
 
 const router: IRouter = Router();
 const PASSWORD = "80801616";
@@ -75,6 +76,54 @@ router.get("/music/download", async (req: Request, res: Response) => {
   } catch (e) {
     logger.error({ err: e, id }, "Download failed");
     res.status(503).json({ message: "Download service unavailable" });
+  }
+});
+
+/* ── Stream URL resolution (Innertube → yt-dlp fallback) ────────────────── */
+router.get("/music/url/:videoId", async (req: Request, res: Response, next: NextFunction) => {
+  const videoId = typeof req.params.videoId === "string" ? req.params.videoId.trim() : "";
+  if (!videoId) { res.status(400).json({ message: "Missing videoId" }); return; }
+
+  // ── Try Innertube first ────────────────────────────────────────────────
+  try {
+    const yt = await getClient();
+    const info = await (yt as any).getBasicInfo(videoId, "WEB");
+    const formats: any[] = info?.streaming_data?.adaptive_formats ?? [];
+    const audioFormats = formats
+      .filter((f: any) => f.has_audio && !f.has_video && f.url)
+      .sort((a: any, b: any) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
+    const best = audioFormats[0];
+    if (best?.url) {
+      logger.info({ videoId, mime: best.mime_type }, "Innertube URL resolved");
+      res.json({ url: best.url, contentType: best.mime_type ?? "audio/webm" });
+      return;
+    }
+  } catch (e) {
+    logger.warn({ err: e, videoId }, "Innertube URL failed, trying yt-dlp");
+  }
+
+  // ── Fallback: yt-dlp --get-url ─────────────────────────────────────────
+  try {
+    const url = await new Promise<string>((resolve, reject) => {
+      const proc = spawn(
+        "yt-dlp",
+        ["--get-url", "-f", "bestaudio", "--no-warnings", `https://youtu.be/${videoId}`],
+        { timeout: 30_000 },
+      );
+      let out = "";
+      proc.stdout.on("data", (d: Buffer) => { out += d.toString(); });
+      proc.on("close", (code: number | null) => {
+        const u = out.trim().split("\n")[0] ?? "";
+        if (code === 0 && u) resolve(u);
+        else reject(new Error(`yt-dlp exit ${code}`));
+      });
+      proc.on("error", reject);
+    });
+    logger.info({ videoId }, "yt-dlp URL resolved");
+    res.json({ url, contentType: "audio/webm" });
+  } catch (e) {
+    logger.error({ err: e, videoId }, "URL resolution failed");
+    next(e);
   }
 });
 

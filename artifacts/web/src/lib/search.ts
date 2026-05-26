@@ -85,6 +85,24 @@ async function searchFallbackYT(query: string): Promise<Track[]> {
 const cache = new Map<string, { data: Track[]; time: number }>();
 const CACHE_TTL = 8 * 60 * 1000;
 
+async function searchViaApiServer(query: string): Promise<Track[]> {
+  const res = await fetch(
+    `/api/music/search?q=${encodeURIComponent(query)}`,
+    { signal: AbortSignal.timeout(15_000) },
+  );
+  if (!res.ok) throw new Error(`API server ${res.status}`);
+  const items = await res.json() as Array<{
+    videoId: string; title: string; artist: string; duration: string; thumbnail: string | null;
+  }>;
+  return items.filter(i => i.videoId).map(i => ({
+    videoId: i.videoId,
+    title:    i.title    ?? "بدون عنوان",
+    artist:   i.artist   ?? "فنان غير معروف",
+    duration: i.duration ?? "0:00",
+    thumbnail: i.thumbnail,
+  }));
+}
+
 export async function searchTracks(query: string): Promise<Track[]> {
   const q = query.trim();
   if (!q) return [];
@@ -92,6 +110,7 @@ export async function searchTracks(query: string): Promise<Track[]> {
   const cached = cache.get(q);
   if (cached && Date.now() - cached.time < CACHE_TTL) return cached.data;
 
+  // ── Try all Piped instances (browser-side, fastest) ──────────────────────
   for (const api of PIPED_INSTANCES) {
     try {
       const results = await searchOnInstance(api, q);
@@ -102,9 +121,21 @@ export async function searchTracks(query: string): Promise<Track[]> {
     } catch { continue; }
   }
 
-  const fallback = await searchFallbackYT(q);
-  if (fallback.length > 0) {
-    cache.set(q, { data: fallback, time: Date.now() });
+  // ── Piped YT videos fallback ──────────────────────────────────────────────
+  const pipedFallback = await searchFallbackYT(q);
+  if (pipedFallback.length > 0) {
+    cache.set(q, { data: pipedFallback, time: Date.now() });
+    return pipedFallback;
   }
-  return fallback;
+
+  // ── Final fallback: API server via Innertube (most reliable) ─────────────
+  try {
+    const apiResults = await searchViaApiServer(q);
+    if (apiResults.length > 0) {
+      cache.set(q, { data: apiResults, time: Date.now() });
+      return apiResults;
+    }
+  } catch { /* give up */ }
+
+  return [];
 }
