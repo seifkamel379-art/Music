@@ -1,0 +1,6 @@
+95:FAILURE: Build failed with an exception.
+97:* What went wrong:
+98:Execution failed for task ':capacitor-android:compileDebugJavaWithJavac'.
+99:> error: invalid source release: 21
+107:org.gradle.api.tasks.TaskExecutionException: Execution failed for task ':capacitor-android:compileDebugJavaWithJavac'.
+168:Caused by: java.lang.IllegalArgumentException: error: invalid source release: 21
